@@ -3,6 +3,12 @@
 
   const STORAGE_KEY = "adventurers-ledger.characters.v1";
   const ACTIVE_KEY = "adventurers-ledger.active-character.v1";
+  const PLAYER_KEY_STORAGE = "adventurers-ledger.player-keys.v1";
+  const SERVER_ROUTE = location.protocol !== "file:";
+  const dmRoute = location.pathname.match(/^\/dm\/([a-f0-9]{48})\/?$/);
+  const playerRoute = location.pathname.match(/^\/join\/([a-f0-9]{8})\/?$/);
+  const SERVER_ROLE = dmRoute ? "dm" : playerRoute ? "player" : "";
+  const SKILL_PICK_COUNTS = { Barbarian: 2, Bard: 3, Cleric: 2, Druid: 2, Fighter: 2, Monk: 2, Paladin: 2, Ranger: 3, Rogue: 4, Sorcerer: 2, Warlock: 2, Wizard: 2 };
   const XP_THRESHOLDS = [0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000, 85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000];
   const ABILITIES = [
     ["strength", "STR"], ["dexterity", "DEX"], ["constitution", "CON"],
@@ -198,8 +204,9 @@
     character.background = background;
     character.alignment = pick(ALIGNMENTS.filter((entry) => entry !== "Unaligned"));
     const backgroundBuild = BACKGROUND_BUILDS[background];
-    const skillCount = className === "Bard" ? 3 : 2;
-    const classSkills = chooseDistinct(build.skills, skillCount);
+    const backgroundSkills = new Set(backgroundBuild.skills.map((skill) => skill.toLowerCase()));
+    const classSkillOptions = build.skills.filter((skill) => !backgroundSkills.has(skill.toLowerCase()));
+    const classSkills = chooseDistinct(classSkillOptions, SKILL_PICK_COUNTS[className] || 2);
     const domain = SUBCLASSES[className] ? pick(SUBCLASSES[className]) : "";
     character.subclass = domain;
 
@@ -320,7 +327,243 @@
   let activeId = localStorage.getItem(ACTIVE_KEY);
   if (!characters.some((character) => character.id === activeId)) activeId = characters[0].id;
   let activeView = "overview";
+  let serverRole = "";
+  let inviteCode = "";
+  let dmToken = "";
+  let playerOwnerKey = "";
+  let playerDisplayName = "";
+  let serverReady = false;
+  let serverSaveTimer;
+  let serverSaveInFlight = false;
+  let serverSaveFailed = false;
+  let dmRefreshInFlight = false;
+  let serverSaveQueue = Promise.resolve();
   let active = () => characters.find((character) => character.id === activeId);
+
+  async function requestJson(url, options) {
+    const response = await fetch(url, options);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Server request failed (${response.status}).`);
+    return result;
+  }
+
+  function storedPlayerKeys() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PLAYER_KEY_STORAGE) || "{}");
+      return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    } catch (error) {
+      console.error("Could not load saved player identities:", error);
+      return {};
+    }
+  }
+
+  function savePlayerKey(room, ownerKey) {
+    const keys = storedPlayerKeys();
+    keys[room] = ownerKey;
+    localStorage.setItem(PLAYER_KEY_STORAGE, JSON.stringify(keys));
+  }
+
+  function normalizeImportedBackup(parsed) {
+    if (parsed && Array.isArray(parsed.characters)) {
+      return {
+        ownerKey: typeof parsed.ownerKey === "string" ? parsed.ownerKey : "",
+        playerName: typeof parsed.playerName === "string" ? parsed.playerName : "",
+        characters: parsed.characters.map(normalizeCharacter).filter(Boolean)
+      };
+    }
+    const character = normalizeCharacter(parsed);
+    if (!character) throw new Error("File tidak berisi karakter yang valid.");
+    return { ownerKey: "", playerName: "", characters: [character] };
+  }
+
+  function downloadJson(filename, value) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function playerBackup(ownerKey, playerName, ownedCharacters) {
+    return { format: "gacha-dnd-player-v1", ownerKey: ownerKey || "", playerName: playerName || "", characters: ownedCharacters };
+  }
+
+  function renderDmRoster() {
+    if (serverRole !== "dm") return;
+    const groups = new Map();
+    characters.forEach((character) => {
+      const key = character.ownerKey || `dm:${character.id}`;
+      if (!groups.has(key)) groups.set(key, { name: character.ownerName || "Karakter DM", ownerKey: character.ownerKey || "", characters: [] });
+      groups.get(key).characters.push(character);
+    });
+    $("#dm-roster-count").textContent = `${characters.length} ${characters.length === 1 ? "karakter" : "karakter"}`;
+    $("#dm-roster").innerHTML = groups.size ? [...groups.entries()].map(([key, group]) => `
+      <div class="dm-roster-entry">
+        <div><strong>${escapeHtml(group.name)}</strong><small>${group.characters.map((character) => `${escapeHtml(character.name)} · Lv ${character.level} ${escapeHtml(character.className)}`).join("<br>")}</small></div>
+        <button class="button button-quiet" type="button" data-export-owner="${escapeHtml(key)}">Unduh backup</button>
+      </div>`).join("") : '<p class="dm-roster-empty">Belum ada karakter di campaign.</p>';
+  }
+
+  function enterPlayerWorkspace(result, room) {
+    inviteCode = room;
+    playerDisplayName = result.playerName;
+    playerOwnerKey = result.ownerKey;
+    savePlayerKey(inviteCode, playerOwnerKey);
+    characters = result.characters.map(normalizeCharacter).filter(Boolean);
+    if (!characters.length) characters = [makeCharacter(`${playerDisplayName}'s Adventurer`, "Fighter")];
+    characters.forEach(syncDerivedStats);
+    activeId = characters[0].id;
+    serverReady = true;
+    $("#player-gate").hidden = true;
+    $("#app-shell").hidden = false;
+    $("#dm-tools").hidden = true;
+    saveCharacters();
+    renderAll();
+    switchView("overview");
+  }
+
+  async function refreshDmCampaign() {
+    if (serverRole !== "dm" || !serverReady || serverSaveFailed || document.hidden || serverSaveTimer || serverSaveInFlight || dmRefreshInFlight) return;
+    dmRefreshInFlight = true;
+    try {
+      const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmToken)}`);
+      const updated = state.characters.map(normalizeCharacter).filter(Boolean);
+      updated.forEach(syncDerivedStats);
+      if (JSON.stringify(updated) !== JSON.stringify(characters)) {
+        characters = updated.length ? updated : characters;
+        if (!characters.some((character) => character.id === activeId)) activeId = characters[0].id;
+        renderAll();
+        renderDmRoster();
+      }
+    } catch (error) {
+      console.error("Could not refresh the DM campaign roster:", error);
+      $("#save-status").textContent = "Tidak dapat memperbarui campaign dari server.";
+    } finally {
+      dmRefreshInFlight = false;
+    }
+  }
+
+  async function initializeServerMode() {
+    if (!SERVER_ROUTE || !SERVER_ROLE) return false;
+    serverRole = SERVER_ROLE;
+    $("#app-shell").hidden = true;
+    if (serverRole === "dm") {
+      $("#player-gate").hidden = true;
+      try {
+        const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmRoute[1])}`);
+        dmToken = dmRoute[1];
+        inviteCode = state.inviteCode;
+        characters = state.characters.map(normalizeCharacter).filter(Boolean);
+        if (!characters.length) characters = [makeCharacter("DM Character", "Fighter")];
+        characters.forEach(syncDerivedStats);
+        activeId = characters.some((character) => character.id === activeId) ? activeId : characters[0].id;
+        $("#player-share-link").value = `${location.origin}/join/${inviteCode}/`;
+        $("#dm-tools").hidden = false;
+        $("#app-shell").hidden = false;
+        serverReady = true;
+        renderAll();
+        renderDmRoster();
+        setInterval(refreshDmCampaign, 4000);
+        return true;
+      } catch (error) {
+        console.error("Could not open the DM workspace:", error);
+        $("#app-shell").hidden = false;
+        $("#save-status").textContent = `Tidak dapat membuka workspace DM: ${error.message}`;
+        showToast("Akses DM tidak valid atau server tidak dapat dijangkau.");
+        return true;
+      }
+    }
+
+    $("#player-gate").hidden = false;
+    const savedOwnerKey = storedPlayerKeys()[playerRoute[1]];
+    if (/^[a-f0-9]{48}$/.test(savedOwnerKey || "")) {
+      try {
+        const savedProfile = await requestJson(`/api/bootstrap?role=player&room=${playerRoute[1]}&owner=${savedOwnerKey}`);
+        if (savedProfile.playerName) {
+          enterPlayerWorkspace(savedProfile, playerRoute[1]);
+          return true;
+        }
+      } catch (error) {
+        console.warn("Could not restore the saved player session:", error);
+        $("#player-gate-error").textContent = "Sesi tersimpan tidak dapat dipulihkan. Masuk lagi atau unggah backup.";
+      }
+    }
+    $("#player-gate-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = $("#player-gate-form button[type=submit]");
+      const errorElement = $("#player-gate-error");
+      errorElement.textContent = "";
+      submit.disabled = true;
+      try {
+        const playerName = $("#player-name-input").value.trim();
+        const file = $("#player-backup-input").files[0];
+        let backup = null;
+        if (file) backup = normalizeImportedBackup(JSON.parse(await file.text()));
+        playerOwnerKey = backup?.ownerKey || storedPlayerKeys()[inviteCode] || randomSecret();
+        if (!/^[a-f0-9]{48}$/.test(playerOwnerKey)) throw new Error("File backup memiliki identitas pemain yang tidak valid.");
+        const result = await requestJson("/api/player/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: playerRoute[1],
+            ownerKey: playerOwnerKey,
+            playerName,
+            playerFile: backup ? { ...backup, ownerKey: playerOwnerKey } : null
+          })
+        });
+        enterPlayerWorkspace(result, playerRoute[1]);
+      } catch (error) {
+        console.error("Could not join the campaign:", error);
+        errorElement.textContent = error.message || "Tidak dapat masuk ke campaign. Periksa koneksi dan file backup.";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    return true;
+  }
+
+  function randomSecret() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function saveServerState() {
+    if (!serverReady || !serverRole) return;
+    clearTimeout(serverSaveTimer);
+    const snapshot = JSON.parse(JSON.stringify(characters));
+    const payload = serverRole === "dm"
+      ? { token: dmToken, characters: snapshot }
+      : { room: inviteCode, ownerKey: playerOwnerKey, playerName: playerDisplayName, characters: snapshot };
+    const endpoint = serverRole === "dm" ? "/api/dm/save" : "/api/player/save";
+    serverSaveTimer = setTimeout(() => {
+      serverSaveTimer = null;
+      serverSaveQueue = serverSaveQueue
+        .then(async () => {
+          serverSaveInFlight = true;
+          try {
+            await requestJson(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            serverSaveFailed = false;
+            $("#save-status").textContent = "Perubahan tersimpan di server campaign.";
+          } finally {
+            serverSaveInFlight = false;
+          }
+        })
+        .catch((error) => {
+          serverSaveInFlight = false;
+          serverSaveFailed = true;
+          console.error("Could not save campaign data:", error);
+          $("#save-status").textContent = "Server belum menyimpan perubahan. Cek koneksi dan unduh backup JSON.";
+          showToast("Gagal menyimpan ke server. Unduh backup JSON sebagai cadangan.");
+        });
+    }, 250);
+  }
 
   function saveCharacters() {
     try {
@@ -332,6 +575,8 @@
       $("#save-status").textContent = "Unable to save. Your browser storage may be full.";
       showToast("Could not save changes to this browser.");
     }
+    renderDmRoster();
+    saveServerState();
   }
 
   function showToast(message) {
@@ -628,6 +873,62 @@
     });
     renderAbilities();
     renderDerivedFields();
+    renderSkillOptions();
+  }
+
+  function parseSelectedSkills(character) {
+    const skillLine = String(character.proficiencies || "").split(/\r?\n/).find((line) => /^skills:/i.test(line));
+    return new Set((skillLine ? skillLine.slice(skillLine.indexOf(":") + 1) : "")
+      .split(",").map((skill) => skill.trim().toLowerCase()).filter(Boolean));
+  }
+
+  function backgroundSkills(character) {
+    return (BACKGROUND_BUILDS[character.background] || BACKGROUND_BUILDS.Custom).skills;
+  }
+
+  function availableClassSkills(character) {
+    const fixed = new Set(backgroundSkills(character).map((skill) => skill.toLowerCase()));
+    return (CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).skills
+      .filter((skill) => !fixed.has(skill.toLowerCase()));
+  }
+
+  function renderSkillOptions() {
+    const character = active();
+    const fixed = backgroundSkills(character);
+    const options = availableClassSkills(character);
+    const count = SKILL_PICK_COUNTS[character.className] || 2;
+    const selected = [...parseSelectedSkills(character)].filter((skill) => options.some((option) => option.toLowerCase() === skill)).slice(0, count);
+    $("#skill-pick-count").textContent = `Pilih ${count} skill class`;
+    $("#skill-picker-help").textContent = fixed.length
+      ? `Background ${character.background} memberi ${fixed.join(", ")} secara otomatis. Pilih ${count} skill tambahan dari class ${character.className}.`
+      : `Pilih ${count} skill dari daftar class ${character.className}.`;
+    $("#skill-options").innerHTML = options.map((skill) =>
+      `<label class="skill-option"><input type="checkbox" data-class-skill="${escapeHtml(skill)}" ${selected.includes(skill.toLowerCase()) ? "checked" : ""}><span>${escapeHtml(skill)}</span></label>`
+    ).join("");
+  }
+
+  function saveSelectedSkills() {
+    const character = active();
+    const selected = $$("[data-class-skill]:checked").map((input) => input.dataset.classSkill);
+    setCharacterSkills(character, selected);
+    saveCharacters();
+    renderSkillOptions();
+    renderOverview();
+  }
+
+  function setCharacterSkills(character, selected) {
+    const background = backgroundSkills(character);
+    const choices = availableClassSkills(character)
+      .filter((skill) => selected.some((choice) => choice.toLowerCase() === skill.toLowerCase()))
+      .slice(0, SKILL_PICK_COUNTS[character.className] || 2);
+    const allSkills = [...new Map([...choices, ...background].map((skill) => [skill.toLowerCase(), skill])).values()];
+    const lines = String(character.proficiencies || "")
+      .split(/\r?\n/)
+      .filter((line) => !/^skills:/i.test(line));
+    lines.push(`Skills: ${allSkills.join(", ")}`);
+    character.proficiencies = lines.filter(Boolean).join("\n");
+    const proficienciesField = $("[data-field=proficiencies]");
+    if (proficienciesField) proficienciesField.value = character.proficiencies;
   }
 
   function renderInventory() {
@@ -669,6 +970,8 @@
     const character = active();
     const key = field.dataset.field;
     const oldClass = character.className;
+    const previousBackgroundSkills = new Set(backgroundSkills(character).map((skill) => skill.toLowerCase()));
+    const previousSkills = [...parseSelectedSkills(character)].filter((skill) => !previousBackgroundSkills.has(skill));
     const oldMaxHp = character.maxHp;
     const updateStarterGear = key === "className" && field.value !== oldClass && hasUntouchedStarterGear(character);
     if (key === "level" || key === "xp" || key === "maxHp" || key === "currentHp" || key === "ac" || key === "speed") {
@@ -698,6 +1001,10 @@
       lines.unshift(saveLine);
       character.proficiencies = lines.join("\n");
     }
+    if (key === "className" || key === "background") {
+      setCharacterSkills(character, previousSkills);
+      renderSkillOptions();
+    }
     if (key !== "currentHp") syncDerivedStats(character);
     else character.currentHp = Math.min(character.maxHp, Math.max(0, Math.trunc(Number(field.value) || 0)));
     if (key !== "currentHp" && oldMaxHp !== character.maxHp) {
@@ -707,6 +1014,7 @@
     saveCharacters();
     renderCharacterList();
     renderOverview();
+    if (serverRole === "dm") renderDmRoster();
     if (updateStarterGear) renderInventory();
     if (key === "name") $("#inventory-title").textContent = `${character.name || "Adventurer"}'s gear`;
   }
@@ -735,26 +1043,50 @@
 
   function exportCharacter() {
     const character = active();
-    const blob = new Blob([JSON.stringify(character, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${character.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "character"}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const slug = character.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "character";
+    if (serverRole === "player") {
+      downloadJson(`${slug}-backup.json`, playerBackup(playerOwnerKey, playerDisplayName, characters));
+    } else if (serverRole === "dm") {
+      const profile = character.ownerKey ? characters.filter((entry) => entry.ownerKey === character.ownerKey) : [character];
+      downloadJson(`${slug}-backup.json`, playerBackup(character.ownerKey || "", character.ownerName || "", profile));
+    } else {
+      downloadJson(`${slug}.json`, character);
+    }
   }
 
   async function importCharacter(file) {
     try {
-      const parsed = JSON.parse(await file.text());
-      const imported = normalizeCharacter(parsed);
-      if (!imported) throw new Error("The JSON file doesn't contain a character.");
+      const backup = normalizeImportedBackup(JSON.parse(await file.text()));
+      if (serverRole === "player") {
+        const ownerKey = backup.ownerKey || playerOwnerKey;
+        if (!/^[a-f0-9]{48}$/.test(ownerKey)) throw new Error("File backup memiliki identitas pemain yang tidak valid.");
+        const result = await requestJson("/api/player/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: inviteCode, ownerKey, playerName: playerDisplayName,
+            playerFile: { ...backup, ownerKey }
+          })
+        });
+        playerOwnerKey = result.ownerKey;
+        savePlayerKey(inviteCode, playerOwnerKey);
+        characters = result.characters.map(normalizeCharacter).filter(Boolean);
+        if (!characters.length) characters = [makeCharacter(`${playerDisplayName}'s Adventurer`, "Fighter")];
+        characters.forEach(syncDerivedStats);
+        activeId = characters[0].id;
+        saveCharacters();
+        renderAll();
+        showToast("Backup pemain berhasil dipulihkan.");
+        return;
+      }
+      const imported = backup.characters[0];
+      if (!imported) throw new Error("File tidak berisi karakter yang valid.");
       imported.id = uid();
       characters.push(imported);
       activeId = imported.id;
       saveCharacters();
       renderAll();
-      showToast("Character imported successfully.");
+      showToast("Karakter berhasil diimpor.");
     } catch (error) {
       console.error("Could not import character:", error);
       showToast("Could not import this file. Choose a valid character JSON export.");
@@ -809,6 +1141,17 @@
   });
   $("#character-form").addEventListener("change", (event) => {
     if (event.target.matches("[data-field]")) updateField(event.target);
+  });
+  $("#skill-options").addEventListener("change", (event) => {
+    const input = event.target.closest("[data-class-skill]");
+    if (!input) return;
+    const maximum = SKILL_PICK_COUNTS[active().className] || 2;
+    if (input.checked && $$("[data-class-skill]:checked").length > maximum) {
+      input.checked = false;
+      showToast(`Class ${active().className} hanya dapat memilih ${maximum} skill.`);
+      return;
+    }
+    saveSelectedSkills();
   });
   $("#ability-inputs").addEventListener("input", (event) => {
     const input = event.target.closest("[data-ability]");
@@ -941,6 +1284,66 @@
     window.print();
   });
 
-  renderAll();
-  switchView("overview");
+  $("#copy-player-link").addEventListener("click", async () => {
+    const link = $("#player-share-link");
+    try {
+      await navigator.clipboard.writeText(link.value);
+    } catch {
+      link.select();
+      document.execCommand("copy");
+    }
+    showToast("Link pemain disalin. Bagikan hanya kepada pemain di hotspot.");
+  });
+  $("#dm-roster").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-export-owner]");
+    if (!button) return;
+    const key = button.dataset.exportOwner;
+    const group = characters.filter((character) => (character.ownerKey || `dm:${character.id}`) === key);
+    if (!group.length) return;
+    downloadJson(`${(group[0].ownerName || group[0].name).toLowerCase().replace(/[^a-z0-9]+/g, "-") || "player"}-backup.json`,
+      playerBackup(group[0].ownerKey || "", group[0].ownerName || "", group));
+  });
+  $("#dm-import-button").addEventListener("click", () => $("#dm-import-file").click());
+  $("#dm-import-file").addEventListener("change", async (event) => {
+    const [file] = event.target.files;
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const backup = normalizeImportedBackup(JSON.parse(await file.text()));
+      const result = await requestJson("/api/dm/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: dmToken, playerFile: { ...backup, characters: backup.characters } })
+      });
+      const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmToken)}`);
+      characters = state.characters.map(normalizeCharacter).filter(Boolean);
+      characters.forEach(syncDerivedStats);
+      activeId = characters.some((character) => character.id === activeId) ? activeId : characters[0]?.id;
+      if (!characters.length) {
+        characters = [makeCharacter("DM Character", "Fighter")];
+        activeId = characters[0].id;
+      }
+      saveCharacters();
+      renderAll();
+      renderDmRoster();
+      showToast(`${result.imported} karakter berhasil diimpor.`);
+    } catch (error) {
+      console.error("Could not import player backup to the campaign:", error);
+      showToast(error.message || "File backup tidak dapat diimpor.");
+    }
+  });
+
+  initializeServerMode()
+    .then((serverMode) => {
+      if (!serverMode) {
+        renderAll();
+        switchView("overview");
+      }
+    })
+    .catch((error) => {
+      console.error("Could not initialize the application:", error);
+      $("#app-shell").hidden = false;
+      $("#player-gate").hidden = true;
+      $("#save-status").textContent = `Aplikasi gagal dimulai: ${error.message}`;
+    });
 })();

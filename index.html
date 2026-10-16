@@ -11,7 +11,20 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
+  <section id="player-gate" class="player-gate" hidden>
+    <form id="player-gate-form" class="player-gate-card">
+      <span class="brand-mark gate-mark">✦</span>
+      <div class="eyebrow">CAMPAIGN PLAYER ACCESS</div>
+      <h1>Masuk ke campaign</h1>
+      <p>Masukkan nama pemain. Untuk membawa karakter dari DM lain, pilih file backup karakter yang kamu unduh.</p>
+      <label class="field"><span>NAMA PEMAIN</span><input id="player-name-input" maxlength="80" required placeholder="Nama kamu"></label>
+      <label class="field"><span>FILE BACKUP KARAKTER <small>(OPSIONAL)</small></span><input id="player-backup-input" type="file" accept="application/json,.json"></label>
+      <button class="button button-primary" type="submit">Masuk campaign →</button>
+      <div id="player-gate-error" class="gate-error" role="alert"></div>
+      <small class="gate-note">Karakter hanya tampil untuk identitas pemain ini. Simpan dan bawa file backup jika berganti DM.</small>
+    </form>
+  </section>
+  <div class="app-shell" id="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#" aria-label="Adventurer's Ledger beranda">
         <span class="brand-mark">✦</span>
@@ -47,6 +60,14 @@
           <div><div class="eyebrow"><span class="eyebrow-line"></span> YOUR ADVENTURER</div><h1>Character overview</h1><p class="page-subtitle">Sekali klik: class, ras, stats, background, fitur, dan perlengkapan langsung diacak.</p></div>
           <button id="gacha-character" class="button button-primary gacha-button"><span>🎲</span> Gacha karakter otomatis</button>
         </div>
+        <section id="dm-tools" class="panel dm-tools" hidden>
+          <div class="panel-heading"><div><div class="eyebrow">PRIVATE DM WORKSPACE</div><h2>Campaign & player files</h2></div><span class="panel-icon">♙</span></div>
+          <p class="dm-warning">URL DM adalah kunci akses rahasia tanpa password. Bagikan hanya URL pemain di bawah ini.</p>
+          <div class="dm-share"><label class="field"><span>LINK UNTUK PEMAIN DI HOTSPOT YANG SAMA</span><div class="share-link-row"><input id="player-share-link" readonly><button id="copy-player-link" class="button button-quiet" type="button">Salin link</button></div></label></div>
+          <div class="dm-import"><label class="field"><span>IMPOR FILE KARAKTER PEMAIN DARI DM LAIN</span><input id="dm-import-file" type="file" accept="application/json,.json"></label><button id="dm-import-button" class="button button-quiet" type="button">Impor file pemain</button></div>
+          <div class="dm-roster-heading"><strong>Karakter di campaign</strong><span id="dm-roster-count">0 karakter</span></div>
+          <div id="dm-roster" class="dm-roster"></div>
+        </section>
         <div class="hero-card">
           <div class="hero-topline"><span class="tag" id="hero-class-tag">FIGHTER</span><span class="hero-level">LEVEL <strong id="hero-level">3</strong></span></div>
           <div class="hero-name-row"><div><h2 id="hero-name">Aelar Thornwood</h2><p id="hero-description">Wood Elf <span>·</span> Soldier <span>·</span> Neutral Good</p></div><div class="hero-initial" id="hero-initial">A</div></div>
@@ -111,6 +132,11 @@
           <section class="panel form-panel">
             <div class="panel-heading"><div><div class="eyebrow">ABILITY SCORES</div><h2>Core attributes</h2></div><span class="panel-caption">Contoh: skor 16 = modifier +3 (bonus angka, bukan persen). Semua turunan ikut diperbarui.</span></div>
             <div id="ability-inputs" class="ability-input-grid"></div>
+          </section>
+          <section class="panel form-panel">
+            <div class="panel-heading"><div><div class="eyebrow">PILIH SENDIRI</div><h2>Class skill proficiencies</h2></div><span id="skill-pick-count" class="panel-caption"></span></div>
+            <p id="skill-picker-help" class="skill-picker-help"></p>
+            <div id="skill-options" class="skill-options"></div>
           </section>
           <section class="panel form-panel">
             <div class="panel-heading"><div><div class="eyebrow">IN THE FIELD</div><h2>Combat & features</h2></div><span class="panel-icon">⚔</span></div>
