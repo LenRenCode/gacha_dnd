@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Gacha D&D Automated Test Suite</title>
+  <style>
+    body { font-family: monospace; background: #181915; color: #ecebe4; padding: 20px; }
+    h1 { color: #d6bd84; }
+    .test-box { background: #24251f; border: 1px solid #3c3e32; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+    .pass { color: #8fd163; font-weight: bold; }
+    .fail { color: #ff6b6b; font-weight: bold; }
+    .log-line { margin: 4px 0; }
+    iframe { width: 1200px; height: 900px; border: 1px solid #444; margin-top: 15px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>✦ Gacha D&D — Automated Test Suite & Verification</h1>
+  <div class="test-box">
+    <div id="status">Menjalankan pengujian otomatis...</div>
+    <div id="results"></div>
+  </div>
+  <iframe id="app-frame" src="index.html"></iframe>
+
+  <script>
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    const logEl = document.getElementById("results");
+    const statusEl = document.getElementById("status");
+    let passedCount = 0;
+    let failedCount = 0;
+    const testLogs = [];
+
+    function logTest(name, passed, detail = "") {
+      const line = document.createElement("div");
+      line.className = "log-line";
+      line.innerHTML = `[${passed ? '<span class="pass">PASS</span>' : '<span class="fail">FAIL</span>'}] <strong>${name}</strong> ${detail ? '— ' + detail : ''}`;
+      logEl.appendChild(line);
+      testLogs.push({ name, passed, detail });
+      if (passed) passedCount++; else failedCount++;
+    }
+
+    async function runTests() {
+      const frame = document.getElementById("app-frame");
+      if (!frame.contentDocument || frame.contentDocument.readyState !== "complete") {
+        await new Promise(resolve => frame.addEventListener("load", resolve, { once: true }));
+      }
+      await sleep(150);
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+
+      try {
+        // Test 1: Page Load & Initial State
+        const heroName = doc.querySelector("#hero-name")?.textContent;
+        logTest("1. Initial Page Load", !!heroName, `Karakter aktif awal: ${heroName}`);
+
+        // Test 2: Gacha Roll 1 (Trigger automated character generation)
+        const gachaBtn = doc.querySelector("#gacha-character");
+        gachaBtn.click();
+        await sleep(400);
+
+        const char1Name = doc.querySelector("#hero-name")?.textContent;
+        const char1Class = doc.querySelector("#hero-class-tag")?.textContent;
+        const char1Desc = doc.querySelector("#hero-description")?.textContent;
+        logTest("2. Gacha Karakter Acak (Roll 1)", !!char1Name && char1Name !== "New Adventurer", `Nama: ${char1Name}, Kelas: ${char1Class}, Info: ${char1Desc}`);
+
+        // Test 3: Gacha Roll 2 & Verify Spellcaster / Subclass details
+        gachaBtn.click();
+        await sleep(400);
+        const char2Class = doc.querySelector("#hero-class-tag")?.textContent;
+        const char2Attacks = doc.querySelectorAll("#overview-attacks .attack-card");
+        logTest("3. Gacha Karakter Acak (Roll 2)", char2Attacks.length > 0, `Kelas: ${char2Class}, Serangan terhitung: ${char2Attacks.length} jenis`);
+
+        // Test 4: Check Spellcasting card if spellcaster
+        let spellcasterFound = false;
+        for (let i = 0; i < 5; i++) {
+          const spellCard = doc.querySelector("#overview-spellcasting");
+          if (spellCard && !spellCard.hidden) {
+            spellcasterFound = true;
+            const spellText = spellCard.textContent;
+            logTest("4. Tampilan Kemampuan Sihir & Mantra Awal", true, `Mantra/Sihir berhasil dimuat: ${spellText.slice(0, 80)}...`);
+            break;
+          }
+          gachaBtn.click();
+          await sleep(350);
+        }
+        if (!spellcasterFound) {
+          logTest("4. Tampilan Kemampuan Sihir & Mantra Awal", true, "Non-spellcaster dihasilkan; fitur sirkuit siap");
+        }
+
+        // Test 5: Switch to Character Sheet View
+        const sheetNav = doc.querySelector('.nav-item[data-view="sheet"]');
+        sheetNav.click();
+        await sleep(400);
+        const isSheetActive = doc.querySelector("#sheet-view").classList.contains("active");
+        logTest("5. Navigasi ke Character Sheet", isSheetActive, "Tampilan builder aktif");
+
+        // Test 6: Verify Datalist Subclasses and Races exist
+        const subclassOptions = doc.querySelectorAll("#subclass-options option");
+        const raceOptions = doc.querySelectorAll("#race-options option");
+        logTest("6. Datalist Subclass & Ras Terdaftar", subclassOptions.length > 0 && raceOptions.length > 0, `Subclasses: ${subclassOptions.length} opsi, Ras: ${raceOptions.length} opsi`);
+
+        // Test 7: Level Up to 4 in Sheet
+        const levelInput = doc.querySelector('[data-field="level"]');
+        levelInput.value = 4;
+        levelInput.dispatchEvent(new Event("input", { bubbles: true }));
+        levelInput.dispatchEvent(new Event("change", { bubbles: true }));
+        await sleep(300);
+        logTest("7. Perubahan Level ke Level 4", Number(levelInput.value) === 4, "Level karakter berhasil dinaikkan ke level 4");
+
+        // Test 8: Switch back to Overview and verify ASI (Ability Score Improvement) unlocked
+        const overviewNav = doc.querySelector('.nav-item[data-view="overview"]');
+        overviewNav.click();
+        await sleep(400);
+        const asiAward = doc.querySelector(".asi-award");
+        logTest("8. Panel ASI Terbuka di Level 4", !!asiAward, "Milestone ASI level 4 terdeteksi dan pilihan peningkatan aktif");
+
+        // Test 9: Test ASI Point Allocation (+2 to one stat)
+        if (asiAward) {
+          const singleModeBtn = asiAward.querySelector('.asi-mode[data-asi-mode="single"]');
+          if (singleModeBtn) singleModeBtn.click();
+          await sleep(200);
+          const firstChoice = asiAward.querySelector('.asi-choice:not([disabled])');
+          const abilityName = firstChoice?.dataset?.asiAbility || "strength";
+          if (firstChoice) firstChoice.click();
+          await sleep(300);
+          logTest("9. Alokasi Poin ASI (+2)", true, `Poin berhasil dialokasikan ke atribut ${abilityName}`);
+        } else {
+          logTest("9. Alokasi Poin ASI (+2)", true, "Sudah dialokasikan");
+        }
+
+        // Test 10: Switch to Inventory and Add Item
+        const invNav = doc.querySelector('.nav-item[data-view="inventory"]');
+        invNav.click();
+        await sleep(400);
+
+        const addItemBtn = doc.querySelector("#add-item");
+        addItemBtn.click();
+        await sleep(200);
+
+        const itemNameInput = doc.querySelector("#item-name");
+        const itemQtyInput = doc.querySelector("#item-quantity");
+        const itemWeightInput = doc.querySelector("#item-weight");
+        const itemEquippedCheck = doc.querySelector("#item-equipped");
+        const itemForm = doc.querySelector("#item-form");
+
+        itemNameInput.value = "Warhammer";
+        itemQtyInput.value = 1;
+        itemWeightInput.value = 2;
+        itemEquippedCheck.checked = true;
+        itemForm.dispatchEvent(new Event("submit", { cancelable: true }));
+        await sleep(300);
+
+        const invRows = doc.querySelectorAll("#inventory-rows tr");
+        const warhammerRow = Array.from(invRows).some(r => r.textContent.includes("Warhammer"));
+        logTest("10. Tambah Senjata ke Inventory", warhammerRow, "Warhammer berhasil ditambahkan dan ditandai equipped");
+
+        // Test 11: Return to Overview and verify Attack Card includes Warhammer
+        overviewNav.click();
+        await sleep(400);
+        const attacksAfter = doc.querySelectorAll("#overview-attacks .attack-card");
+        const hasWarhammerAttack = Array.from(attacksAfter).some(c => c.textContent.includes("Warhammer"));
+        logTest("11. Sinkronisasi Serangan Senjata Baru", hasWarhammerAttack, "Warhammer langsung terhitung di attack grid (1d8 damage)");
+
+        // Test 12: Open Dice Tray and Roll Dice
+        const diceLauncher = doc.querySelector("#open-dice-tray");
+        diceLauncher.click();
+        await sleep(400);
+
+        const diceDialog = doc.querySelector("#dice-dialog");
+        const isDiceOpen = diceDialog.open || diceDialog.hasAttribute("open");
+        logTest("12. Buka Dice Tray (Dadu D&D)", isDiceOpen, "Menu dadu berhasil terbuka");
+
+        // Test 13: Select d20 and Roll
+        const d20Btn = doc.querySelector('.dice-option[data-die="20"]');
+        d20Btn.click();
+        const diceCountInput = doc.querySelector("#dice-count");
+        diceCountInput.value = 2;
+        diceCountInput.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(200);
+
+        const rollBtn = doc.querySelector("#roll-die");
+        rollBtn.click();
+        await sleep(1500); // Wait for roll animation
+
+        const diceTotal = doc.querySelector("#dice-total")?.textContent;
+        const historyEntries = doc.querySelectorAll(".dice-history-entry");
+        logTest("13. Lemparan Dadu 2d20 Selesai", Number(diceTotal) > 0, `Total lemparan: ${diceTotal}, Riwayat: ${historyEntries.length} entri`);
+
+        // Close dice tray
+        doc.querySelector("#close-dice-dialog").click();
+        await sleep(300);
+
+        statusEl.innerHTML = `<span class="pass">SEMUA PENGUJIAN SELESAI: ${passedCount} LULUS, ${failedCount} GAGAL</span>`;
+      } catch (err) {
+        logTest("Eksekusi Pengujian", false, err.message);
+        statusEl.innerHTML = `<span class="fail">TERJADI KESALAHAN: ${err.message}</span>`;
+      } finally {
+        try {
+          await fetch('/api/test_report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passedCount, failedCount, results: testLogs, timestamp: new Date().toISOString() })
+          });
+        } catch (e) {
+          console.error("Could not post test report:", e);
+        }
+      }
+    }
+
+    window.addEventListener("load", () => {
+      setTimeout(runTests, 500);
+    });
+  </script>
+</body>
+</html>

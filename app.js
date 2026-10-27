@@ -1,0 +1,1756 @@
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "adventurers-ledger.characters.v1";
+  const ACTIVE_KEY = "adventurers-ledger.active-character.v1";
+  const PLAYER_KEY_STORAGE = "adventurers-ledger.player-keys.v1";
+  const SERVER_ROUTE = location.protocol !== "file:";
+  const dmRoute = location.pathname.match(/^\/dm\/([a-f0-9]{48})\/?$/);
+  const playerRoute = location.pathname.match(/^\/join\/([a-f0-9]{8})\/?$/);
+  const SERVER_ROLE = dmRoute ? "dm" : playerRoute ? "player" : "";
+  const SKILL_PICK_COUNTS = { Barbarian: 2, Bard: 3, Cleric: 2, Druid: 2, Fighter: 2, Monk: 2, Paladin: 2, Ranger: 3, Rogue: 4, Sorcerer: 2, Warlock: 2, Wizard: 2 };
+  const XP_THRESHOLDS = [0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000, 85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000];
+  const ABILITIES = [
+    ["strength", "STR"], ["dexterity", "DEX"], ["constitution", "CON"],
+    ["intelligence", "INT"], ["wisdom", "WIS"], ["charisma", "CHA"]
+  ];
+  const CLASSES = ["Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"];
+  const BACKGROUNDS = ["Acolyte", "Charlatan", "Criminal", "Entertainer", "Folk Hero", "Gladiator", "Guild Artisan", "Guild Merchant", "Hermit", "Knight", "Noble", "Outlander", "Pirate", "Sage", "Sailor", "Soldier", "Spy", "Urchin", "Custom"];
+  const ALIGNMENTS = ["Lawful Good", "Neutral Good", "Chaotic Good", "Lawful Neutral", "True Neutral", "Chaotic Neutral", "Lawful Evil", "Neutral Evil", "Chaotic Evil", "Unaligned"];
+  const RACES = [
+    { name: "Human", bonuses: { strength: 1, dexterity: 1, constitution: 1, intelligence: 1, wisdom: 1, charisma: 1 }, trait: "Versatile: +1 to all ability scores." },
+    { name: "Variant Human", bonuses: {}, trait: "Variant heritage: +1 to two ability scores and one bonus feat." },
+    { name: "High Elf", bonuses: { dexterity: 2, intelligence: 1 }, trait: "Darkvision, Fey Ancestry, and one wizard cantrip." },
+    { name: "Wood Elf", bonuses: { dexterity: 2, wisdom: 1 }, trait: "Darkvision, Fey Ancestry, Fleet of Foot, and Mask of the Wild." },
+    { name: "Drow (Dark Elf)", bonuses: { dexterity: 2, charisma: 1 }, trait: "Superior Darkvision (120 ft.), Sunlight Sensitivity, Fey Ancestry, and Drow Magic." },
+    { name: "Dwarf", bonuses: { constitution: 2, wisdom: 1 }, trait: "Darkvision, Dwarven Resilience, and Stonecunning." },
+    { name: "Hill Dwarf", bonuses: { constitution: 2, wisdom: 1 }, trait: "Darkvision, Dwarven Resilience, and Dwarven Toughness (+1 HP/level)." },
+    { name: "Mountain Dwarf", bonuses: { strength: 2, constitution: 2 }, trait: "Darkvision, Dwarven Resilience, Stonecunning, and Dwarven Armor Training." },
+    { name: "Lightfoot Halfling", bonuses: { dexterity: 2, charisma: 1 }, trait: "Lucky, Brave, Halfling Nimbleness, and Naturally Stealthy." },
+    { name: "Stout Halfling", bonuses: { dexterity: 2, constitution: 1 }, trait: "Lucky, Brave, Halfling Nimbleness, and Stout Resilience." },
+    { name: "Dragonborn", bonuses: { strength: 2, charisma: 1 }, trait: "Draconic ancestry, Breath Weapon, and damage resistance." },
+    { name: "Forest Gnome", bonuses: { intelligence: 2, dexterity: 1 }, trait: "Darkvision, Gnome Cunning, and Speak with Small Beasts." },
+    { name: "Rock Gnome", bonuses: { intelligence: 2, constitution: 1 }, trait: "Darkvision, Gnome Cunning, Artificer's Lore, and Tinker." },
+    { name: "Half-Elf", bonuses: { charisma: 2 }, trait: "Darkvision, Fey Ancestry, and two flexible +1 ability bonuses." },
+    { name: "Half-Orc", bonuses: { strength: 2, constitution: 1 }, trait: "Darkvision, Relentless Endurance, and Savage Attacks." },
+    { name: "Tiefling", bonuses: { charisma: 2, intelligence: 1 }, trait: "Darkvision, Hellish Resistance, and Infernal Legacy (Thaumaturgy)." }
+  ];
+  const CLASS_BUILDS = {
+    Barbarian: { hitDie: 12, priorities: ["strength", "constitution", "dexterity", "wisdom", "charisma", "intelligence"], saves: "Strength, Constitution", armor: "Unarmored Defense (10 + DEX + CON)", skills: ["Animal Handling", "Athletics", "Intimidation", "Nature", "Perception", "Survival"], features: "Rage (2 uses); Unarmored Defense" },
+    Bard: { hitDie: 8, priorities: ["charisma", "dexterity", "constitution", "wisdom", "intelligence", "strength"], saves: "Dexterity, Charisma", armor: "Leather armor (AC 11 + DEX)", skills: ["Acrobatics", "Animal Handling", "Arcana", "Athletics", "Deception", "History", "Insight", "Intimidation", "Investigation", "Medicine", "Nature", "Perception", "Performance", "Persuasion", "Religion", "Sleight of Hand", "Stealth", "Survival"], features: "Spellcasting; Bardic Inspiration (d6, 1 use)" },
+    Cleric: { hitDie: 8, priorities: ["wisdom", "constitution", "strength", "charisma", "dexterity", "intelligence"], saves: "Wisdom, Charisma", armor: "Scale mail and shield (AC 16 + DEX, max 2)", skills: ["History", "Insight", "Medicine", "Persuasion", "Religion"], features: "Spellcasting; Divine Domain; domain feature" },
+    Druid: { hitDie: 8, priorities: ["wisdom", "constitution", "dexterity", "intelligence", "charisma", "strength"], saves: "Intelligence, Wisdom", armor: "Leather armor and wooden shield (AC 11 + DEX + 2)", skills: ["Animal Handling", "Arcana", "Insight", "Medicine", "Nature", "Perception", "Religion", "Survival"], features: "Druidic; Spellcasting" },
+    Fighter: { hitDie: 10, priorities: ["strength", "constitution", "dexterity", "wisdom", "charisma", "intelligence"], saves: "Strength, Constitution", armor: "Chain mail and shield (AC 18)", skills: ["Acrobatics", "Animal Handling", "Athletics", "History", "Insight", "Intimidation", "Perception", "Survival"], features: "Fighting Style; Second Wind (1 use)" },
+    Monk: { hitDie: 8, priorities: ["dexterity", "wisdom", "constitution", "strength", "intelligence", "charisma"], saves: "Strength, Dexterity", armor: "Unarmored Defense (10 + DEX + WIS)", skills: ["Acrobatics", "Athletics", "History", "Insight", "Religion", "Stealth"], features: "Unarmored Defense; Martial Arts (d4)" },
+    Paladin: { hitDie: 10, priorities: ["strength", "charisma", "constitution", "wisdom", "dexterity", "intelligence"], saves: "Wisdom, Charisma", armor: "Chain mail and shield (AC 18)", skills: ["Athletics", "Insight", "Intimidation", "Medicine", "Persuasion", "Religion"], features: "Divine Sense (5 uses); Lay on Hands (5 HP)" },
+    Ranger: { hitDie: 10, priorities: ["dexterity", "wisdom", "constitution", "strength", "intelligence", "charisma"], saves: "Strength, Dexterity", armor: "Leather armor (AC 11 + DEX)", skills: ["Animal Handling", "Athletics", "Insight", "Investigation", "Nature", "Perception", "Stealth", "Survival"], features: "Favored Enemy; Natural Explorer" },
+    Rogue: { hitDie: 8, priorities: ["dexterity", "constitution", "intelligence", "wisdom", "charisma", "strength"], saves: "Dexterity, Intelligence", armor: "Leather armor (AC 11 + DEX)", skills: ["Acrobatics", "Athletics", "Deception", "Insight", "Intimidation", "Investigation", "Perception", "Performance", "Persuasion", "Sleight of Hand", "Stealth"], features: "Expertise; Sneak Attack (1d6); Thieves' Cant" },
+    Sorcerer: { hitDie: 6, priorities: ["charisma", "constitution", "dexterity", "wisdom", "intelligence", "strength"], saves: "Constitution, Charisma", armor: "Unarmored (AC 10 + DEX)", skills: ["Arcana", "Deception", "Insight", "Intimidation", "Persuasion", "Religion"], features: "Spellcasting; Sorcerous Origin; origin feature" },
+    Warlock: { hitDie: 8, priorities: ["charisma", "constitution", "dexterity", "wisdom", "intelligence", "strength"], saves: "Wisdom, Charisma", armor: "Leather armor (AC 11 + DEX)", skills: ["Arcana", "Deception", "History", "Intimidation", "Investigation", "Nature", "Religion"], features: "Otherworldly Patron; Pact Magic; patron feature" },
+    Wizard: { hitDie: 6, priorities: ["intelligence", "constitution", "dexterity", "wisdom", "charisma", "strength"], saves: "Intelligence, Wisdom", armor: "Unarmored (AC 10 + DEX)", skills: ["Arcana", "History", "Insight", "Investigation", "Medicine", "Religion"], features: "Spellcasting; Arcane Recovery" }
+  };
+  const SKILLS = [
+    ["Acrobatics", "dexterity"], ["Animal Handling", "wisdom"], ["Arcana", "intelligence"],
+    ["Athletics", "strength"], ["Deception", "charisma"], ["History", "intelligence"],
+    ["Insight", "wisdom"], ["Intimidation", "charisma"], ["Investigation", "intelligence"],
+    ["Medicine", "wisdom"], ["Nature", "intelligence"], ["Perception", "wisdom"],
+    ["Performance", "charisma"], ["Persuasion", "charisma"], ["Religion", "intelligence"],
+    ["Sleight of Hand", "dexterity"], ["Stealth", "dexterity"], ["Survival", "wisdom"]
+  ];
+  const WEAPON_DAMAGE = {
+    "club": ["1d4", "strength"], "dagger": ["1d4", "finesse"], "greatclub": ["1d8", "strength"],
+    "handaxe": ["1d6", "strength"], "javelin": ["1d6", "strength"], "light hammer": ["1d4", "strength"],
+    "mace": ["1d6", "strength"], "quarterstaff": ["1d6", "strength"], "sickle": ["1d4", "finesse"],
+    "spear": ["1d6", "strength"], "light crossbow": ["1d8", "dexterity"], "dart": ["1d4", "finesse"],
+    "shortbow": ["1d6", "dexterity"], "sling": ["1d4", "dexterity"], "battleaxe": ["1d8", "strength"],
+    "flail": ["1d8", "strength"], "glaive": ["1d10", "strength"], "greataxe": ["1d12", "strength"],
+    "greatsword": ["2d6", "strength"], "halberd": ["1d10", "strength"], "lance": ["1d12", "strength"],
+    "longsword": ["1d8", "strength"], "maul": ["2d6", "strength"], "morningstar": ["1d8", "strength"],
+    "pike": ["1d10", "strength"], "rapier": ["1d8", "finesse"], "scimitar": ["1d6", "finesse"],
+    "shortsword": ["1d6", "finesse"], "trident": ["1d6", "strength"], "war pick": ["1d8", "strength"],
+    "warhammer": ["1d8", "strength"], "whip": ["1d4", "finesse"], "blowgun": ["1", "dexterity"],
+    "hand crossbow": ["1d6", "dexterity"], "heavy crossbow": ["1d10", "dexterity"], "longbow": ["1d8", "dexterity"],
+    "unarmed strike": ["1", "strength"]
+  };
+  const SPELLCASTING_ABILITIES = {
+    Bard: "charisma", Cleric: "wisdom", Druid: "wisdom", Paladin: "charisma",
+    Ranger: "wisdom", Sorcerer: "charisma", Warlock: "charisma", Wizard: "intelligence"
+  };
+  const STARTER_SPELLS = {
+    Bard: {
+      cantrips: ["Vicious Mockery", "Minor Illusion", "Prestidigitation"],
+      spells: ["Cure Wounds", "Dissonant Whispers", "Faerie Fire", "Healing Word"]
+    },
+    Cleric: {
+      cantrips: ["Sacred Flame", "Guidance", "Thaumaturgy"],
+      spells: ["Bless", "Cure Wounds", "Guiding Bolt", "Healing Word"]
+    },
+    Druid: {
+      cantrips: ["Druidcraft", "Produce Flame", "Shillelagh"],
+      spells: ["Entangle", "Faerie Fire", "Goodberry", "Healing Word"]
+    },
+    Paladin: {
+      cantrips: [],
+      spells: ["Bless", "Cure Wounds", "Divine Favor", "Wrathful Smite"]
+    },
+    Ranger: {
+      cantrips: [],
+      spells: ["Hunter's Mark", "Cure Wounds", "Ensnaring Strike", "Fog Cloud"]
+    },
+    Sorcerer: {
+      cantrips: ["Fire Bolt", "Ray of Frost", "Mage Hand", "Prestidigitation"],
+      spells: ["Magic Missile", "Shield", "Burning Hands", "Chromatic Orb"]
+    },
+    Warlock: {
+      cantrips: ["Eldritch Blast", "Mage Hand", "Prestidigitation"],
+      spells: ["Hex", "Arms of Hadar", "Hellish Rebuke", "Armor of Agathys"]
+    },
+    Wizard: {
+      cantrips: ["Fire Bolt", "Mage Hand", "Prestidigitation", "Ray of Frost"],
+      spells: ["Mage Armor", "Magic Missile", "Shield", "Sleep", "Detect Magic", "Burning Hands"]
+    }
+  };
+  const ASI_LEVELS = {
+    Barbarian: [4, 8, 12, 16, 19],
+    Bard: [4, 8, 12, 16, 19],
+    Cleric: [4, 8, 12, 16, 19],
+    Druid: [4, 8, 12, 16, 19],
+    Fighter: [4, 6, 8, 12, 14, 16, 19],
+    Monk: [4, 8, 12, 16, 19],
+    Paladin: [4, 8, 12, 16, 19],
+    Ranger: [4, 8, 12, 16, 19],
+    Rogue: [4, 8, 10, 12, 16, 19],
+    Sorcerer: [4, 8, 12, 16, 19],
+    Warlock: [4, 8, 12, 16, 19],
+    Wizard: [4, 8, 12, 16, 19]
+  };
+  const BACKGROUND_BUILDS = {
+    Acolyte: { feature: "Shelter of the Faithful", skills: ["Insight", "Religion"], gear: ["Holy symbol", "Prayer book", "Incense"] },
+    Charlatan: { feature: "False Identity", skills: ["Deception", "Sleight of Hand"], gear: ["Disguise kit", "Forgery kit"] },
+    Criminal: { feature: "Criminal Contact", skills: ["Deception", "Stealth"], gear: ["Thieves' tools", "Dark clothes"] },
+    Entertainer: { feature: "By Popular Demand", skills: ["Acrobatics", "Performance"], gear: ["Musical instrument", "Costume"] },
+    "Folk Hero": { feature: "Rustic Hospitality", skills: ["Animal Handling", "Survival"], gear: ["Artisan's tools", "Shovel"] },
+    Gladiator: { feature: "By Popular Demand (Arena)", skills: ["Acrobatics", "Performance"], gear: ["Costume", "Trident", "Gladiator token"] },
+    "Guild Artisan": { feature: "Guild Membership", skills: ["Insight", "Persuasion"], gear: ["Artisan's tools", "Guild letter"] },
+    "Guild Merchant": { feature: "Guild Membership", skills: ["Insight", "Persuasion"], gear: ["Cartographer's tools", "Letter of introduction", "Mule token"] },
+    Hermit: { feature: "Discovery", skills: ["Medicine", "Religion"], gear: ["Herbalism kit", "Scroll case"] },
+    Knight: { feature: "Position of Privilege (Retainers)", skills: ["History", "Persuasion"], gear: ["Fine clothes", "Signet ring", "Banner"] },
+    Noble: { feature: "Position of Privilege", skills: ["History", "Persuasion"], gear: ["Fine clothes", "Signet ring"] },
+    Outlander: { feature: "Wanderer", skills: ["Athletics", "Survival"], gear: ["Hunting trap", "Staff"] },
+    Pirate: { feature: "Bad Reputation", skills: ["Athletics", "Perception"], gear: ["Belaying pin", "50 ft. silk rope", "Lucky charm"] },
+    Sage: { feature: "Researcher", skills: ["Arcana", "History"], gear: ["Ink and quill", "Small knife"] },
+    Sailor: { feature: "Ship's Passage", skills: ["Athletics", "Perception"], gear: ["Navigator's tools", "Rope"] },
+    Soldier: { feature: "Military Rank", skills: ["Athletics", "Intimidation"], gear: ["Gaming set", "Military insignia"] },
+    Spy: { feature: "Criminal Contact (Espionage)", skills: ["Deception", "Stealth"], gear: ["Dark clothes", "Thieves' tools", "Secret cipher"] },
+    Urchin: { feature: "City Secrets", skills: ["Sleight of Hand", "Stealth"], gear: ["Disguise kit", "Small pet"] },
+    Custom: { feature: "A story yet to be written", skills: [], gear: [] }
+  };
+  const SUBCLASSES = {
+    Barbarian: ["Path of the Berserker", "Path of the Totem Warrior"],
+    Bard: ["College of Lore", "College of Valor"],
+    Cleric: ["Life Domain", "Light Domain", "Knowledge Domain", "Nature Domain", "Tempest Domain", "Trickery Domain", "War Domain"],
+    Druid: ["Circle of the Land", "Circle of the Moon"],
+    Fighter: ["Champion", "Battle Master", "Eldritch Knight"],
+    Monk: ["Way of the Open Hand", "Way of Shadow", "Way of the Four Elements"],
+    Paladin: ["Oath of Devotion", "Oath of the Ancients", "Oath of Vengeance"],
+    Ranger: ["Hunter", "Beast Master"],
+    Rogue: ["Thief", "Assassin", "Arcane Trickster"],
+    Sorcerer: ["Draconic Bloodline", "Wild Magic"],
+    Warlock: ["The Archfey", "The Fiend", "The Great Old One"],
+    Wizard: ["School of Evocation", "School of Abjuration", "School of Conjuration", "School of Divination", "School of Enchantment", "School of Illusion", "School of Necromancy", "School of Transmutation"]
+  };
+  const HUMAN_FEATS = ["Alert", "Athlete", "Actor", "Charger", "Crossbow Expert", "Defensive Duelist", "Dual Wielder", "Dungeon Delver", "Durable", "Grappler", "Great Weapon Master", "Healer", "Inspiring Leader", "Keen Mind", "Linguist", "Lucky", "Mage Slayer", "Magic Initiate", "Martial Adept", "Mobile", "Mounted Combatant", "Observant", "Polearm Master", "Resilient", "Ritual Caster", "Savage Attacker", "Sentinel", "Sharpshooter", "Shield Master", "Skilled", "Skulker", "Spell Sniper", "Tavern Brawler", "Tough", "War Caster"];
+  const FIRST_NAMES = ["Aelar", "Bryn", "Dara", "Eira", "Fen", "Galen", "Hana", "Ivo", "Jora", "Kael", "Lira", "Mira", "Neris", "Orin", "Perrin", "Quinn", "Runa", "Soren", "Tamsin", "Vale", "Wren", "Yara", "Zev"];
+  const LAST_NAMES = ["Ashford", "Brightwood", "Dawnstrider", "Emberfall", "Frostvale", "Greenbriar", "Hollowmere", "Ironwood", "Moonwhisper", "Oakenshield", "Ravencrest", "Silverleaf", "Stormborn", "Thornwood", "Windwalker"];
+  const CLASS_GEAR = {
+    Cleric: [["Mace", 1, 4, true], ["Scale mail", 1, 45, true], ["Shield", 1, 6, true], ["Priest's pack", 1, 24, false]],
+    Druid: [["Wooden shield", 1, 10, true], ["Scimitar", 1, 3, true], ["Leather armor", 1, 10, true], ["Explorer's pack", 1, 59, false]],
+    Fighter: [["Longsword", 1, 3, true], ["Shield", 1, 6, true], ["Chain mail", 1, 55, true], ["Explorer's pack", 1, 59, false]],
+    Paladin: [["Longsword", 1, 3, true], ["Shield", 1, 6, true], ["Chain mail", 1, 55, true], ["Priest's pack", 1, 24, false]]
+  };
+  const STARTING_GEAR = {
+    Barbarian: [["Greataxe", 1, 7, true], ["Handaxes", 2, 2, true], ["Explorer's pack", 1, 59, false], ["Javelins", 4, 8, false]],
+    Bard: [["Rapier", 1, 2, true], ["Lute", 1, 2, false], ["Leather armor", 1, 10, true], ["Diplomat's pack", 1, 46, false]],
+    Cleric: [["Mace", 1, 4, true], ["Scale mail", 1, 45, true], ["Shield", 1, 6, true], ["Priest's pack", 1, 24, false]],
+    Druid: [["Wooden shield", 1, 10, true], ["Scimitar", 1, 3, true], ["Leather armor", 1, 10, true], ["Explorer's pack", 1, 59, false]],
+    Fighter: [["Longsword", 1, 3, true], ["Shield", 1, 6, true], ["Chain mail", 1, 55, true], ["Explorer's pack", 1, 59, false]],
+    Monk: [["Shortsword", 1, 2, true], ["Dart", 10, 0.25, true], ["Explorer's pack", 1, 59, false]],
+    Paladin: [["Longsword", 1, 3, true], ["Shield", 1, 6, true], ["Chain mail", 1, 55, true], ["Priest's pack", 1, 24, false]],
+    Ranger: [["Longbow", 1, 2, true], ["Arrows", 20, 0.05, false], ["Shortsword", 1, 2, true], ["Leather armor", 1, 10, true], ["Explorer's pack", 1, 59, false]],
+    Rogue: [["Rapier", 1, 2, true], ["Shortbow", 1, 2, true], ["Arrows", 20, 0.05, false], ["Burglar's pack", 1, 47, false], ["Leather armor", 1, 10, true]],
+    Sorcerer: [["Light crossbow", 1, 5, true], ["Bolts", 20, 0.075, false], ["Dagger", 2, 1, true], ["Component pouch", 1, 2, false], ["Explorer's pack", 1, 59, false]],
+    Warlock: [["Light crossbow", 1, 5, true], ["Bolts", 20, 0.075, false], ["Dagger", 2, 1, true], ["Component pouch", 1, 2, false], ["Scholar's pack", 1, 10, false]],
+    Wizard: [["Quarterstaff", 1, 4, true], ["Spellbook", 1, 3, false], ["Component pouch", 1, 2, false], ["Scholar's pack", 1, 10, false]]
+  };
+
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char]);
+  const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let toastTimer;
+
+  function starterInventory(className) {
+    return (STARTING_GEAR[className] || STARTING_GEAR.Fighter)
+      .map(([item, quantity, weight, equipped]) => ({ id: uid(), item, quantity, weight, equipped }));
+  }
+
+  function hasUntouchedStarterGear(character) {
+    const expected = STARTING_GEAR[character.className] || STARTING_GEAR.Fighter;
+    return character.inventory.length === expected.length && character.inventory.every((item, index) => {
+      const [name, quantity, weight, equipped] = expected[index];
+      return item.item === name && item.quantity === quantity && item.weight === weight && item.equipped === equipped;
+    });
+  }
+
+  function makeCharacter(name = "New Adventurer", className = "Fighter") {
+    return {
+      id: uid(), name, className, subclass: "", level: 1, race: "", background: "Custom", alignment: "Unaligned",
+      xp: 0, maxHp: 10, currentHp: 10, ac: 10, speed: 30, gold: 0, feats: "", proficiencies: "", features: "", notes: "",
+      abilities: { strength: 10, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10, charisma: 10 },
+      manualStats: { maxHp: null, ac: null }, effects: [],
+      asiChoicesUsed: [], asiProgress: {},
+      inventory: starterInventory(className)
+    };
+  }
+
+  function pick(values) {
+    return values[Math.floor(Math.random() * values.length)];
+  }
+
+  function rollAbilityScore() {
+    const dice = Array.from({ length: 4 }, () => 1 + Math.floor(Math.random() * 6)).sort((a, b) => a - b);
+    return dice[1] + dice[2] + dice[3];
+  }
+
+  function chooseDistinct(values, count) {
+    const remaining = [...values];
+    const chosen = [];
+    while (chosen.length < count && remaining.length) {
+      chosen.push(remaining.splice(Math.floor(Math.random() * remaining.length), 1)[0]);
+    }
+    return chosen;
+  }
+
+  function makeGachaCharacter() {
+    const className = pick(CLASSES);
+    const build = CLASS_BUILDS[className];
+    const background = pick(BACKGROUNDS.filter((entry) => entry !== "Custom"));
+    const race = pick(RACES);
+    const character = makeCharacter(`${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, className);
+
+    const rolledScores = Array.from({ length: ABILITIES.length }, rollAbilityScore).sort((a, b) => b - a);
+    character.abilities = {};
+    build.priorities.forEach((ability, index) => {
+      character.abilities[ability] = rolledScores[index];
+    });
+
+    const racialBonuses = { ...race.bonuses };
+    if (race.name === "Variant Human") {
+      chooseDistinct(build.priorities, 2).forEach((ability) => { racialBonuses[ability] = 1; });
+      character.feats = pick(HUMAN_FEATS);
+    } else if (race.name === "Half-Elf") {
+      chooseDistinct(build.priorities.filter((ability) => ability !== "charisma"), 2)
+        .forEach((ability) => { racialBonuses[ability] = 1; });
+    }
+    for (const [ability, bonus] of Object.entries(racialBonuses)) {
+      character.abilities[ability] = Math.min(20, character.abilities[ability] + bonus);
+    }
+
+    character.race = race.name;
+    character.background = background;
+    character.alignment = pick(ALIGNMENTS.filter((entry) => entry !== "Unaligned"));
+    const backgroundBuild = BACKGROUND_BUILDS[background];
+    const backgroundSkills = new Set(backgroundBuild.skills.map((skill) => skill.toLowerCase()));
+    const classSkillOptions = build.skills.filter((skill) => !backgroundSkills.has(skill.toLowerCase()));
+    const classSkills = chooseDistinct(classSkillOptions, SKILL_PICK_COUNTS[className] || 2);
+    const domain = SUBCLASSES[className] ? pick(SUBCLASSES[className]) : "";
+    character.subclass = domain;
+
+    let features = [build.features, race.trait, `Background feature: ${backgroundBuild.feature}`];
+    if (domain) features.push(`Subclass archetype: ${domain}`);
+    if (className === "Fighter") features.push(`Fighting Style: ${pick(["Archery", "Defense", "Dueling", "Great Weapon Fighting", "Protection", "Two-Weapon Fighting"])}`);
+    if (className === "Paladin") features.push(`Fighting Style: ${pick(["Defense", "Dueling", "Great Weapon Fighting", "Protection"])}`);
+    if (className === "Ranger") features.push(`Fighting Style: ${pick(["Archery", "Defense", "Dueling", "Two-Weapon Fighting"])}`);
+    if (race.name === "Variant Human") features.push(`Bonus feat: ${character.feats}`);
+    const starterMagic = STARTER_SPELLS[className];
+    if (starterMagic) {
+      if (starterMagic.cantrips?.length) features.push(`Cantrips: ${starterMagic.cantrips.join(", ")}`);
+      if (starterMagic.spells?.length) features.push(`Starter Spells (Lv 1): ${starterMagic.spells.join(", ")}`);
+    }
+    character.features = features.join("\n");
+    character.proficiencies = `Saving throws: ${build.saves}\nSkills: ${[...classSkills, ...backgroundBuild.skills].join(", ")}\nWeapons/armor: ${className} starting proficiencies`;
+    character.notes = pick([
+      "A half-finished map points toward a place no one remembers.",
+      "Someone from your past has started asking for you by name.",
+      "You owe a debt that cannot be repaid with gold.",
+      "A strange mark appeared overnight and matches an old prophecy.",
+      "You promised to bring someone home, no matter the cost.",
+      "You carry a sealed letter you have never dared to open."
+    ]);
+
+    const constitutionModifier = abilityModifier(character.abilities.constitution);
+    character.maxHp = Math.max(1, build.hitDie + constitutionModifier + (race.name === "Hill Dwarf" ? 1 : 0));
+    character.currentHp = character.maxHp;
+    const dexterityModifier = abilityModifier(character.abilities.dexterity);
+    if (className === "Barbarian") character.ac = 10 + dexterityModifier + constitutionModifier;
+    else if (className === "Monk") character.ac = 10 + dexterityModifier + abilityModifier(character.abilities.wisdom);
+    else if (className === "Cleric") character.ac = 14 + Math.min(2, dexterityModifier) + 2;
+    else if (["Fighter", "Paladin"].includes(className)) character.ac = 18;
+    else if (className === "Druid") character.ac = 13 + dexterityModifier;
+    else if (["Bard", "Ranger", "Rogue", "Warlock"].includes(className)) character.ac = 11 + dexterityModifier;
+    else character.ac = 10 + dexterityModifier;
+
+    const classGear = CLASS_GEAR[className] || STARTING_GEAR[className] || STARTING_GEAR.Fighter;
+    character.inventory = starterInventory(className);
+    if (CLASS_GEAR[className]) {
+      character.inventory = classGear.map(([item, quantity, weight, equipped]) => ({ id: uid(), item, quantity, weight, equipped }));
+    }
+    for (const item of backgroundBuild.gear) {
+      character.inventory.push({ id: uid(), item, quantity: 1, weight: 1, equipped: false });
+    }
+    character.gold = 5 + Math.floor(Math.random() * 16);
+    syncDerivedStats(character);
+    return character;
+  }
+
+  function normalizeCharacter(value) {
+    if (!value || typeof value !== "object" || typeof value.name !== "string") return null;
+    const defaults = makeCharacter(value.name, CLASSES.includes(value.className) ? value.className : "Fighter");
+    const numeric = (candidate, fallback, min, max = Number.MAX_SAFE_INTEGER) => {
+      const number = Number(candidate);
+      return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback;
+    };
+    const abilities = {};
+    for (const [key] of ABILITIES) abilities[key] = numeric(value.abilities?.[key], 10, 1, 30);
+    const inventory = Array.isArray(value.inventory) ? value.inventory.filter((item) => item && typeof item.item === "string").map((item) => ({
+      id: typeof item.id === "string" ? item.id : uid(),
+      item: item.item.slice(0, 80),
+      quantity: numeric(item.quantity, 1, 1, 99999),
+      weight: Math.max(0, Number.isFinite(Number(item.weight)) ? Number(item.weight) : 0),
+      equipped: Boolean(item.equipped)
+    })) : defaults.inventory;
+    const normalized = { ...defaults, ...value, id: typeof value.id === "string" ? value.id : uid(), abilities, inventory };
+    normalized.manualStats = value.manualStats && typeof value.manualStats === "object" ? {
+      maxHp: value.manualStats.maxHp != null && Number.isFinite(Number(value.manualStats.maxHp)) ? Math.max(1, Math.trunc(Number(value.manualStats.maxHp))) : null,
+      ac: value.manualStats.ac != null && Number.isFinite(Number(value.manualStats.ac)) ? Math.max(0, Math.trunc(Number(value.manualStats.ac))) : null
+    } : { maxHp: null, ac: null };
+    normalized.effects = Array.isArray(value.effects) ? value.effects.slice(0, 100).filter((effect) => effect && typeof effect === "object").map((effect) => ({
+      id: typeof effect.id === "string" ? effect.id : uid(),
+      type: effect.type === "debuff" ? "debuff" : "buff",
+      name: String(effect.name || "Effect").slice(0, 80),
+      source: String(effect.source || "").slice(0, 80),
+      description: String(effect.description || "").slice(0, 240),
+      duration: String(effect.duration || "").slice(0, 80),
+      origin: effect.origin === "skill" ? "skill" : "dm",
+      sourceId: typeof effect.sourceId === "string" ? effect.sourceId : "",
+      appliedBy: String(effect.appliedBy || "").slice(0, 80),
+      createdAt: Number.isFinite(Number(effect.createdAt)) ? Number(effect.createdAt) : Date.now()
+    })) : [];
+    normalized.className = CLASSES.includes(normalized.className) ? normalized.className : "Fighter";
+    normalized.level = numeric(normalized.level, 1, 1, 20);
+    normalized.xp = numeric(normalized.xp, 0, 0);
+    normalized.maxHp = numeric(normalized.maxHp, 1, 1);
+    normalized.currentHp = numeric(normalized.currentHp, 0, 0, normalized.maxHp);
+    normalized.ac = numeric(normalized.ac, 10, 0);
+    normalized.speed = numeric(normalized.speed, 30, 0);
+    normalized.gold = numeric(normalized.gold, 0, 0);
+    const validAsiLevels = new Set(ASI_LEVELS[normalized.className] || ASI_LEVELS.Fighter);
+    normalized.asiChoicesUsed = [...new Set(
+      (Array.isArray(value.asiChoicesUsed) ? value.asiChoicesUsed : [])
+        .map((level) => numeric(level, 0, 1, 20))
+        .filter((level) => validAsiLevels.has(level))
+    )];
+    normalized.asiProgress = {};
+    const rawAsiProgress = value.asiProgress && typeof value.asiProgress === "object" && !Array.isArray(value.asiProgress)
+      ? value.asiProgress
+      : {};
+    for (const [rawLevel, progress] of Object.entries(rawAsiProgress)) {
+      const level = numeric(rawLevel, 0, 1, 20);
+      if (!validAsiLevels.has(level) || normalized.asiChoicesUsed.includes(level) || !progress || typeof progress !== "object") continue;
+      const mode = ["single", "split"].includes(progress.mode) ? progress.mode : "";
+      const rawAllocations = progress.allocations && typeof progress.allocations === "object" && !Array.isArray(progress.allocations)
+        ? progress.allocations
+        : {};
+      const allocations = {};
+      for (const [ability, points] of Object.entries(rawAllocations)) {
+        if (!ABILITIES.some(([key]) => key === ability) || (mode === "single" && Number(points) !== 2) || (mode === "split" && Number(points) !== 1)) continue;
+        allocations[ability] = Number(points);
+        if (mode === "single") break;
+      }
+      const total = Object.values(allocations).reduce((sum, points) => sum + points, 0);
+      if (total >= 2) normalized.asiChoicesUsed.push(level);
+      else if (mode) normalized.asiProgress[level] = { mode, allocations };
+    }
+    for (const key of ["name", "subclass", "race", "background", "alignment", "feats", "proficiencies", "features", "notes"]) {
+      if (typeof normalized[key] !== "string") normalized[key] = defaults[key];
+    }
+    return normalized;
+  }
+
+  function loadCharacters() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      if (!Array.isArray(saved)) throw new Error("Saved character data must be a list.");
+      const result = saved.map(normalizeCharacter).filter(Boolean);
+      return result.length ? result : [makeCharacter("Aelar Thornwood", "Fighter")];
+    } catch (error) {
+      console.error("Could not load saved characters:", error);
+      showToast("Saved characters could not be loaded. A new character was created.");
+      return [makeCharacter("Aelar Thornwood", "Fighter")];
+    }
+  }
+
+  let characters = loadCharacters();
+  characters.forEach(syncDerivedStats);
+  let activeId = localStorage.getItem(ACTIVE_KEY);
+  if (!characters.some((character) => character.id === activeId)) activeId = characters[0].id;
+  let activeView = "overview";
+  let serverRole = "";
+  let inviteCode = "";
+  let dmToken = "";
+  let playerOwnerKey = "";
+  let playerDisplayName = "";
+  let serverReady = false;
+  let serverSaveTimer;
+  let serverSaveInFlight = false;
+  let serverSaveFailed = false;
+  let dmRefreshInFlight = false;
+  let playerRefreshInFlight = false;
+  let playerEffectTargets = [];
+  let serverSaveQueue = Promise.resolve();
+  let active = () => characters.find((character) => character.id === activeId);
+
+  async function requestJson(url, options) {
+    const response = await fetch(url, options);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Server request failed (${response.status}).`);
+    return result;
+  }
+
+  function storedPlayerKeys() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PLAYER_KEY_STORAGE) || "{}");
+      return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+    } catch (error) {
+      console.error("Could not load saved player identities:", error);
+      return {};
+    }
+  }
+
+  function savePlayerKey(room, ownerKey) {
+    const keys = storedPlayerKeys();
+    keys[room] = ownerKey;
+    localStorage.setItem(PLAYER_KEY_STORAGE, JSON.stringify(keys));
+  }
+
+  function normalizeImportedBackup(parsed) {
+    if (parsed && Array.isArray(parsed.characters)) {
+      return {
+        ownerKey: typeof parsed.ownerKey === "string" ? parsed.ownerKey : "",
+        playerName: typeof parsed.playerName === "string" ? parsed.playerName : "",
+        characters: parsed.characters.map(normalizeCharacter).filter(Boolean)
+      };
+    }
+    const character = normalizeCharacter(parsed);
+    if (!character) throw new Error("File tidak berisi karakter yang valid.");
+    return { ownerKey: "", playerName: "", characters: [character] };
+  }
+
+  function downloadJson(filename, value) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function playerBackup(ownerKey, playerName, ownedCharacters) {
+    return { format: "gacha-dnd-player-v1", ownerKey: ownerKey || "", playerName: playerName || "", characters: ownedCharacters };
+  }
+
+  function renderDmRoster() {
+    if (serverRole !== "dm") return;
+    const groups = new Map();
+    characters.forEach((character) => {
+      const key = character.ownerKey || `dm:${character.id}`;
+      if (!groups.has(key)) groups.set(key, { name: character.ownerName || "Karakter DM", ownerKey: character.ownerKey || "", characters: [] });
+      groups.get(key).characters.push(character);
+    });
+    $("#dm-roster-count").textContent = `${characters.length} ${characters.length === 1 ? "karakter" : "karakter"}`;
+    $("#dm-roster").innerHTML = groups.size ? [...groups.entries()].map(([key, group]) => `
+      <div class="dm-roster-entry">
+        <div class="dm-roster-player"><strong>${escapeHtml(group.name)}</strong>${group.characters.map((character) => `<button class="dm-character-link ${character.id === activeId ? "selected" : ""}" type="button" data-dm-character="${escapeHtml(character.id)}">${escapeHtml(character.name)} · Lv ${character.level} ${escapeHtml(character.className)}</button>`).join("")}</div>
+        <button class="button button-quiet" type="button" data-export-owner="${escapeHtml(key)}">Unduh backup</button>
+      </div>`).join("") : '<p class="dm-roster-empty">Belum ada karakter di campaign.</p>';
+  }
+
+  function enterPlayerWorkspace(result, room) {
+    inviteCode = room;
+    playerDisplayName = result.playerName;
+    playerOwnerKey = result.ownerKey;
+    savePlayerKey(inviteCode, playerOwnerKey);
+    characters = result.characters.map(normalizeCharacter).filter(Boolean);
+    if (!characters.length) characters = [makeCharacter(`${playerDisplayName}'s Adventurer`, "Fighter")];
+    characters.forEach(syncDerivedStats);
+    activeId = characters[0].id;
+    serverReady = true;
+    $("#player-gate").hidden = true;
+    $("#app-shell").hidden = false;
+    $("#dm-tools").hidden = true;
+    saveCharacters();
+    renderAll();
+    switchView("overview");
+    loadPlayerEffectTargets();
+    setInterval(refreshPlayerProfile, 4000);
+  }
+
+  async function refreshDmCampaign() {
+    if (serverRole !== "dm" || !serverReady || serverSaveFailed || document.hidden || serverSaveTimer || serverSaveInFlight || dmRefreshInFlight) return;
+    dmRefreshInFlight = true;
+    try {
+      const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmToken)}`);
+      const updated = state.characters.map(normalizeCharacter).filter(Boolean);
+      updated.forEach(syncDerivedStats);
+      if (JSON.stringify(updated) !== JSON.stringify(characters)) {
+        characters = updated.length ? updated : characters;
+        if (!characters.some((character) => character.id === activeId)) activeId = characters[0].id;
+        renderAll();
+        renderDmRoster();
+      }
+    } catch (error) {
+      console.error("Could not refresh the DM campaign roster:", error);
+      $("#save-status").textContent = "Tidak dapat memperbarui campaign dari server.";
+    } finally {
+      dmRefreshInFlight = false;
+    }
+  }
+
+  async function loadPlayerEffectTargets() {
+    if (serverRole !== "player" || !serverReady) return;
+    try {
+      const result = await requestJson(`/api/bootstrap?role=targets&room=${inviteCode}&owner=${playerOwnerKey}`);
+      playerEffectTargets = result.targets;
+      renderEffectTargets();
+    } catch (error) {
+      console.error("Could not load campaign effect targets:", error);
+    }
+  }
+
+  async function refreshPlayerProfile() {
+    if (serverRole !== "player" || !serverReady || document.hidden || serverSaveTimer || serverSaveInFlight || playerRefreshInFlight) return;
+    playerRefreshInFlight = true;
+    try {
+      const state = await requestJson(`/api/bootstrap?role=player&room=${inviteCode}&owner=${playerOwnerKey}`);
+      const updated = state.characters.map(normalizeCharacter).filter(Boolean);
+      if (JSON.stringify(updated) !== JSON.stringify(characters)) {
+        characters = updated.length ? updated : characters;
+        if (!characters.some((character) => character.id === activeId)) activeId = characters[0].id;
+        renderAll();
+      }
+      await loadPlayerEffectTargets();
+    } catch (error) {
+      console.error("Could not refresh the player character:", error);
+      $("#save-status").textContent = "Tidak dapat memperbarui karakter dari server.";
+    } finally {
+      playerRefreshInFlight = false;
+    }
+  }
+
+  async function initializeServerMode() {
+    if (!SERVER_ROUTE || !SERVER_ROLE) return false;
+    serverRole = SERVER_ROLE;
+    $("#app-shell").hidden = true;
+    if (serverRole === "dm") {
+      $("#player-gate").hidden = true;
+      try {
+        const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmRoute[1])}`);
+        dmToken = dmRoute[1];
+        inviteCode = state.inviteCode;
+        characters = state.characters.map(normalizeCharacter).filter(Boolean);
+        if (!characters.length) characters = [makeCharacter("DM Character", "Fighter")];
+        characters.forEach(syncDerivedStats);
+        activeId = characters.some((character) => character.id === activeId) ? activeId : characters[0].id;
+        $("#player-share-link").value = `${location.origin}/join/${inviteCode}/`;
+        $("#dm-tools").hidden = false;
+        $("#app-shell").hidden = false;
+        serverReady = true;
+        renderAll();
+        renderDmRoster();
+        setInterval(refreshDmCampaign, 4000);
+        return true;
+      } catch (error) {
+        console.error("Could not open the DM workspace:", error);
+        $("#app-shell").hidden = false;
+        $("#save-status").textContent = `Tidak dapat membuka workspace DM: ${error.message}`;
+        showToast("Akses DM tidak valid atau server tidak dapat dijangkau.");
+        return true;
+      }
+    }
+
+    $("#player-gate").hidden = false;
+    const savedOwnerKey = storedPlayerKeys()[playerRoute[1]];
+    if (/^[a-f0-9]{48}$/.test(savedOwnerKey || "")) {
+      try {
+        const savedProfile = await requestJson(`/api/bootstrap?role=player&room=${playerRoute[1]}&owner=${savedOwnerKey}`);
+        if (savedProfile.playerName) {
+          enterPlayerWorkspace(savedProfile, playerRoute[1]);
+          return true;
+        }
+      } catch (error) {
+        console.warn("Could not restore the saved player session:", error);
+        $("#player-gate-error").textContent = "Sesi tersimpan tidak dapat dipulihkan. Masuk lagi atau unggah backup.";
+      }
+    }
+    $("#player-gate-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = $("#player-gate-form button[type=submit]");
+      const errorElement = $("#player-gate-error");
+      errorElement.textContent = "";
+      submit.disabled = true;
+      try {
+        const playerName = $("#player-name-input").value.trim();
+        const file = $("#player-backup-input").files[0];
+        let backup = null;
+        if (file) backup = normalizeImportedBackup(JSON.parse(await file.text()));
+        playerOwnerKey = backup?.ownerKey || storedPlayerKeys()[inviteCode] || randomSecret();
+        if (!/^[a-f0-9]{48}$/.test(playerOwnerKey)) throw new Error("File backup memiliki identitas pemain yang tidak valid.");
+        const result = await requestJson("/api/player/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: playerRoute[1],
+            ownerKey: playerOwnerKey,
+            playerName,
+            playerFile: backup ? { ...backup, ownerKey: playerOwnerKey } : null
+          })
+        });
+        enterPlayerWorkspace(result, playerRoute[1]);
+      } catch (error) {
+        console.error("Could not join the campaign:", error);
+        errorElement.textContent = error.message || "Tidak dapat masuk ke campaign. Periksa koneksi dan file backup.";
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    return true;
+  }
+
+  function randomSecret() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function saveServerState() {
+    if (!serverReady || !serverRole) return;
+    clearTimeout(serverSaveTimer);
+    const snapshot = JSON.parse(JSON.stringify(characters));
+    const payload = serverRole === "dm"
+      ? { token: dmToken, characters: snapshot }
+      : { room: inviteCode, ownerKey: playerOwnerKey, playerName: playerDisplayName, characters: snapshot };
+    const endpoint = serverRole === "dm" ? "/api/dm/save" : "/api/player/save";
+    serverSaveTimer = setTimeout(() => {
+      serverSaveTimer = null;
+      serverSaveQueue = serverSaveQueue
+        .then(async () => {
+          serverSaveInFlight = true;
+          try {
+            await requestJson(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            serverSaveFailed = false;
+            $("#save-status").textContent = "Perubahan tersimpan di server campaign.";
+          } finally {
+            serverSaveInFlight = false;
+          }
+        })
+        .catch((error) => {
+          serverSaveInFlight = false;
+          serverSaveFailed = true;
+          console.error("Could not save campaign data:", error);
+          $("#save-status").textContent = "Server belum menyimpan perubahan. Cek koneksi dan unduh backup JSON.";
+          showToast("Gagal menyimpan ke server. Unduh backup JSON sebagai cadangan.");
+        });
+    }, 250);
+  }
+
+  function saveCharacters() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(characters));
+      localStorage.setItem(ACTIVE_KEY, activeId);
+      $("#save-status").textContent = "All changes saved in this browser.";
+    } catch (error) {
+      console.error("Could not save characters:", error);
+      $("#save-status").textContent = "Unable to save. Your browser storage may be full.";
+      showToast("Could not save changes to this browser.");
+    }
+    renderDmRoster();
+    saveServerState();
+  }
+
+  function showToast(message) {
+    const toast = $("#toast");
+    toast.textContent = message;
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+  }
+
+  function abilityModifier(score) {
+    return Math.floor((score - 10) / 2);
+  }
+
+  function signed(value) {
+    return value >= 0 ? `+${value}` : String(value);
+  }
+
+  function proficiencyBonus(level) {
+    return Math.floor((level - 1) / 4) + 2;
+  }
+
+  function skillProficiencies(character) {
+    const line = String(character.proficiencies || "").split(/\r?\n/).find((entry) => /^skills:/i.test(entry));
+    return new Set((line ? line.slice(line.indexOf(":") + 1) : "").split(",").map((skill) => skill.trim().toLowerCase()).filter(Boolean));
+  }
+
+  function savingThrowProficiencies(character) {
+    const line = String(character.proficiencies || "").split(/\r?\n/).find((entry) => /^saving throws:/i.test(entry));
+    const saves = line ? line.slice(line.indexOf(":") + 1) : (CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).saves;
+    return new Set(saves.split(",").map((ability) => ability.trim().toLowerCase()));
+  }
+
+  function calculatedMaxHp(character) {
+    const hitDie = (CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).hitDie;
+    const constitution = abilityModifier(character.abilities.constitution);
+    const hillDwarfBonus = character.race === "Hill Dwarf" ? 1 : 0;
+    const toughBonus = /\btough\b/i.test(character.feats) ? 2 : 0;
+    const level = Math.max(1, character.level);
+    const firstLevel = Math.max(1, hitDie + constitution);
+    const laterLevels = Math.max(1, Math.floor(hitDie / 2) + 1 + constitution);
+    return firstLevel + (level - 1) * (laterLevels + hillDwarfBonus + toughBonus) + hillDwarfBonus + toughBonus;
+  }
+
+  function calculatedArmorClass(character) {
+    const dexterity = abilityModifier(character.abilities.dexterity);
+    const equipped = character.inventory.filter((item) => item.equipped).map((item) => item.item.toLowerCase());
+    const armor = equipped.find((item) => /plate|splint|chain mail|ring mail|half plate|scale mail|breastplate|chain shirt|hide|studded leather|leather|padded/.test(item));
+    const shield = equipped.some((item) => item.includes("shield")) ? 2 : 0;
+    if (armor) {
+      if (armor.includes("plate")) return 18 + shield;
+      if (armor.includes("splint")) return 17 + shield;
+      if (armor.includes("chain mail")) return 16 + shield;
+      if (armor.includes("ring mail")) return 14 + shield;
+      if (armor.includes("half plate")) return 15 + Math.min(2, dexterity) + shield;
+      if (armor.includes("scale mail") || armor.includes("breastplate")) return 14 + Math.min(2, dexterity) + shield;
+      if (armor.includes("chain shirt")) return 13 + Math.min(2, dexterity) + shield;
+      if (armor.includes("hide")) return 12 + Math.min(2, dexterity) + shield;
+      if (armor.includes("studded leather")) return 12 + dexterity + shield;
+      if (armor.includes("leather") || armor.includes("padded")) return 11 + dexterity + shield;
+    }
+    if (character.className === "Barbarian") return 10 + dexterity + abilityModifier(character.abilities.constitution) + shield;
+    if (character.className === "Monk") return 10 + dexterity + abilityModifier(character.abilities.wisdom);
+    return 10 + dexterity + shield;
+  }
+
+  function syncDerivedStats(character) {
+    const previousMax = Math.max(1, Number(character.maxHp) || 1);
+    const previousCurrent = Math.max(0, Number(character.currentHp) || 0);
+    const missingHp = Math.max(0, previousMax - previousCurrent);
+    character.maxHp = character.manualStats?.maxHp ?? calculatedMaxHp(character);
+    character.currentHp = Math.max(0, character.maxHp - missingHp);
+    character.ac = character.manualStats?.ac ?? calculatedArmorClass(character);
+  }
+
+  function derivedCombat(character) {
+    const proficiency = proficiencyBonus(character.level);
+    const dexterity = abilityModifier(character.abilities.dexterity);
+    const saveProficiencies = savingThrowProficiencies(character);
+    const skillsProficient = skillProficiencies(character);
+    const attacks = character.inventory
+      .filter((item) => item.equipped)
+      .map((item) => {
+        const rawName = item.item.toLowerCase().trim();
+        const singularName = rawName.replace(/s$/, "");
+        let definition = WEAPON_DAMAGE[rawName] || WEAPON_DAMAGE[singularName];
+        if (!definition) {
+          const foundKey = Object.keys(WEAPON_DAMAGE).find((k) => rawName.includes(k));
+          if (foundKey) definition = WEAPON_DAMAGE[foundKey];
+        }
+        if (!definition) return null;
+        const [damage, ability] = definition;
+        const attackAbility = ability === "finesse"
+          ? (character.abilities.dexterity > character.abilities.strength ? "dexterity" : "strength")
+          : ability;
+        const modifier = abilityModifier(character.abilities[attackAbility]);
+        return {
+          name: item.item,
+          toHit: proficiency + modifier,
+          damage: `${damage}${modifier >= 0 ? "+" : ""}${modifier}`,
+          ability: attackAbility
+        };
+      })
+      .filter(Boolean);
+    if (!attacks.length) {
+      const modifier = abilityModifier(character.abilities.strength);
+      attacks.push({ name: "Unarmed strike", toHit: proficiency + modifier, damage: `1${modifier >= 0 ? "+" : ""}${modifier}`, ability: "strength" });
+    }
+    const spellAbility = SPELLCASTING_ABILITIES[character.className]
+      && (!["Paladin", "Ranger"].includes(character.className) || character.level >= 2)
+      ? SPELLCASTING_ABILITIES[character.className]
+      : null;
+    const saves = ABILITIES.map(([ability, shortName]) => ({
+      ability: shortName,
+      bonus: abilityModifier(character.abilities[ability]) + (saveProficiencies.has(ability) ? proficiency : 0),
+      proficient: saveProficiencies.has(ability)
+    }));
+    const skills = SKILLS.map(([name, ability]) => ({
+      name,
+      ability,
+      bonus: abilityModifier(character.abilities[ability]) + (skillsProficient.has(name.toLowerCase()) ? proficiency : 0),
+      proficient: skillsProficient.has(name.toLowerCase())
+    }));
+    return {
+      proficiency,
+      attacks,
+      saves,
+      skills,
+      perception: 10 + abilityModifier(character.abilities.wisdom) + (skillsProficient.has("perception") ? proficiency : 0),
+      spellcasting: spellAbility ? {
+        ability: spellAbility,
+        attack: proficiency + abilityModifier(character.abilities[spellAbility]),
+        dc: 8 + proficiency + abilityModifier(character.abilities[spellAbility]),
+        starterSpells: STARTER_SPELLS[character.className] || null
+      } : null
+    };
+  }
+
+  function levelFromXp(xp) {
+    let level = 1;
+    for (let index = 1; index < XP_THRESHOLDS.length; index += 1) {
+      if (xp < XP_THRESHOLDS[index]) break;
+      level = index + 1;
+    }
+    return level;
+  }
+
+  function renderCharacterList() {
+    $("#character-list").innerHTML = characters.map((character) => `
+      <div class="character-entry-wrap">
+        <button class="character-entry ${character.id === activeId ? "selected" : ""}" data-character="${escapeHtml(character.id)}">
+          <span class="character-avatar">${escapeHtml(character.name.trim().charAt(0).toUpperCase() || "?")}</span>
+          <span class="character-entry-text"><strong>${escapeHtml(character.name)}</strong><small>Lvl ${character.level} ${escapeHtml(character.className)}</small></span>
+        </button>
+        <button class="character-delete" data-delete-character="${escapeHtml(character.id)}" aria-label="Hapus ${escapeHtml(character.name)}" title="Hapus karakter" ${characters.length === 1 ? "disabled" : ""}>×</button>
+      </div>`).join("");
+  }
+
+  function renderAbilities() {
+    const character = active();
+    renderAbilityCards();
+    $("#ability-inputs").innerHTML = ABILITIES.map(([key, shortName]) => {
+      const score = Number(character.abilities[key]) || 10;
+      return `<div class="ability-input"><label for="ability-${key}">${shortName}</label><input id="ability-${key}" data-ability="${key}" type="number" min="1" max="30" value="${score}" aria-label="${shortName} score"><small>Modifier ${signed(abilityModifier(score))}</small></div>`;
+    }).join("");
+  }
+
+  function renderAbilityCards() {
+    const character = active();
+    $("#ability-cards").innerHTML = ABILITIES.map(([key, shortName]) => {
+      const score = Number(character.abilities[key]) || 10;
+      return `<div class="ability-card"><span>${shortName}</span><strong>${score}</strong><small>${signed(abilityModifier(score))}</small></div>`;
+    }).join("");
+  }
+
+  function asiMilestones(character) {
+    return ASI_LEVELS[character.className] || ASI_LEVELS.Fighter;
+  }
+
+  function renderAsiProgress() {
+    const character = active();
+    const milestones = asiMilestones(character);
+    const used = new Set(character.asiChoicesUsed);
+    const available = milestones.filter((level) => level <= character.level && !used.has(level));
+    const container = $("#asi-content");
+    if (!available.length) {
+      const nextMilestone = milestones.find((level) => level > character.level);
+      if (!nextMilestone) {
+        container.innerHTML = '<p class="asi-status">Semua peningkatan ability score sampai level ini sudah digunakan.</p>';
+        return;
+      }
+      const hitDie = (CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).hitDie;
+      const averageHitDie = Math.floor(hitDie / 2) + 1;
+      const constitutionBonus = abilityModifier(character.abilities.constitution);
+      const hpGain = Math.max(1, averageHitDie + constitutionBonus);
+      container.innerHTML = `<div class="next-level-card"><div><strong>Level berikutnya: ${character.level + 1}</strong><span>HP maksimum bertambah sekitar +${hpGain} (rata-rata d${hitDie} ${signed(constitutionBonus)} CON).</span></div><div><strong>ASI berikutnya: level ${nextMilestone}</strong><span>Saat level ${nextMilestone}, dapat 2 poin: +2 ke satu ability atau +1 ke dua ability berbeda.</span></div></div>`;
+      return;
+    }
+    container.innerHTML = available.map((level) => {
+      const progress = character.asiProgress[level] && typeof character.asiProgress[level] === "object"
+        ? character.asiProgress[level]
+        : { mode: "", allocations: {} };
+      const allocations = progress.allocations && typeof progress.allocations === "object" ? progress.allocations : {};
+      const totalAllocated = Object.values(allocations).reduce((sum, points) => sum + Math.max(0, Number(points) || 0), 0);
+      const mode = ["single", "split"].includes(progress.mode) ? progress.mode : "";
+      const remaining = Math.max(0, 2 - totalAllocated);
+      const choices = ABILITIES.map(([ability, abbreviation]) => {
+        const score = Number(character.abilities[ability]) || 10;
+        const points = Number(allocations[ability]) || 0;
+        const alreadyUsed = mode === "split" && points > 0;
+        const increment = mode === "single" ? 2 : 1;
+        const disabled = !mode || remaining === 0 || score + increment > 20 || alreadyUsed;
+        return `<button class="asi-choice" data-asi-level="${level}" data-asi-ability="${ability}" ${disabled ? "disabled" : ""}><span>${abbreviation}</span><strong>${score}</strong><small>${points ? `+${points} allocated` : mode ? `+${increment}` : "Choose mode first"}</small></button>`;
+      }).join("");
+      return `<div class="asi-award" data-asi-award="${level}">
+        <div class="asi-award-heading"><strong>Level ${level} improvement</strong><span>${remaining ? `${remaining} point${remaining === 1 ? "" : "s"} left` : "Complete"}</span></div>
+        <div class="asi-modes"><button class="asi-mode ${mode === "single" ? "selected" : ""}" data-asi-mode="single" data-asi-level="${level}" ${totalAllocated ? "disabled" : ""}>+2 to one stat</button><button class="asi-mode ${mode === "split" ? "selected" : ""}" data-asi-mode="split" data-asi-level="${level}" ${totalAllocated ? "disabled" : ""}>+1 to two stats</button></div>
+        <div class="asi-choices">${choices}</div>
+        ${totalAllocated && remaining > 0 ? `<button class="asi-reset" data-asi-reset="${level}">Undo point allocation</button>` : ""}
+        ${remaining === 0 ? '<p class="asi-complete">Poin selesai dialokasikan dan tersimpan.</p>' : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function renderDerivedFields() {
+    const character = active();
+    $$("[data-derived]").forEach((field) => {
+      field.value = character[field.dataset.derived];
+      field.readOnly = serverRole !== "dm";
+    });
+  }
+
+  function renderDerivedOverview() {
+    const character = active();
+    const combat = derivedCombat(character);
+    $("#overview-attacks").innerHTML = combat.attacks.map((attack) => `
+      <div class="attack-card"><span class="attack-name">${escapeHtml(attack.name)}</span><span>TO HIT <strong>${signed(attack.toHit)}</strong></span><span>DAMAGE <strong>${escapeHtml(attack.damage)}</strong></span></div>`).join("");
+    const spellcasting = $("#overview-spellcasting");
+    if (combat.spellcasting) {
+      spellcasting.hidden = false;
+      const cantrips = combat.spellcasting.starterSpells?.cantrips?.length
+        ? `<div class="spell-group"><span>CANTRIP (MANTRA DASAR)</span><div class="spell-badge-list">${combat.spellcasting.starterSpells.cantrips.map((c) => `<span class="spell-pill">${escapeHtml(c)}</span>`).join("")}</div></div>`
+        : "";
+      const spells = combat.spellcasting.starterSpells?.spells?.length
+        ? `<div class="spell-group"><span>SPELL LEVEL 1 (SIHIR AWAL)</span><div class="spell-badge-list">${combat.spellcasting.starterSpells.spells.map((s) => `<span class="spell-pill">${escapeHtml(s)}</span>`).join("")}</div></div>`
+        : "";
+      spellcasting.innerHTML = `
+        <div class="spell-stats-row">
+          <span>SPELL SAVE DC <strong>${combat.spellcasting.dc}</strong></span>
+          <span>SPELL ATTACK <strong>${signed(combat.spellcasting.attack)}</strong></span>
+          <span>ABILITY <strong>${combat.spellcasting.ability.toUpperCase()}</strong></span>
+        </div>
+        ${cantrips || spells ? `<div class="spell-lists">${cantrips}${spells}</div>` : ""}
+      `;
+    } else {
+      spellcasting.hidden = true;
+      spellcasting.replaceChildren();
+    }
+    $("#overview-saves").innerHTML = combat.saves.map((save) => `
+      <div class="saving-throw ${save.proficient ? "proficient" : ""}" role="listitem" title="${escapeHtml(save.ability)} saving throw${save.proficient ? ", proficient" : ""}">
+        <span aria-label="${escapeHtml(save.ability)}">${escapeHtml(save.ability.slice(0, 3).toUpperCase())}</span>
+        <strong>${signed(save.bonus)}</strong>
+        ${save.proficient ? '<small aria-label="Proficient" title="Proficient">✓</small>' : ""}
+      </div>`).join("");
+    $("#overview-perception").textContent = combat.perception;
+    const carriedWeight = character.inventory.reduce((sum, item) => sum + item.weight * item.quantity, 0);
+    $("#overview-carry").textContent = `${Number(carriedWeight.toFixed(1))} / ${character.abilities.strength * 15} lb.`;
+    $("#overview-skills").innerHTML = combat.skills.map((skill) =>
+      `<div class="skill-row ${skill.proficient ? "proficient" : ""}"><span>${escapeHtml(skill.name)}${skill.proficient ? " · P" : ""}</span><strong>${signed(skill.bonus)}</strong></div>`
+    ).join("");
+    renderDerivedFields();
+  }
+
+  function renderOverview() {
+    const character = active();
+    const nextThreshold = character.level >= 20 ? XP_THRESHOLDS[19] : XP_THRESHOLDS[character.level];
+    const currentThreshold = XP_THRESHOLDS[character.level - 1];
+    const progress = character.level >= 20 ? 100 : Math.min(100, Math.max(0, ((character.xp - currentThreshold) / (nextThreshold - currentThreshold)) * 100));
+    $("#hero-class-tag").textContent = character.className.toUpperCase();
+    $("#hero-level").textContent = character.level;
+    $("#hero-name").textContent = character.name || "Unnamed Adventurer";
+    $("#hero-description").innerHTML = [character.race, character.background, character.alignment].filter(Boolean).map(escapeHtml).join(" <span>·</span> ") || "Make this character your own";
+    $("#hero-initial").textContent = character.name.trim().charAt(0).toUpperCase() || "?";
+    $("#hero-hp").textContent = character.currentHp;
+    $("#hero-max-hp").textContent = character.maxHp;
+    $("#hp-progress").style.width = `${Math.min(100, character.maxHp ? (character.currentHp / character.maxHp) * 100 : 0)}%`;
+    $("#hero-ac").textContent = character.ac;
+    $("#hero-initiative").textContent = signed(abilityModifier(character.abilities.dexterity));
+    $("#hero-proficiency").textContent = signed(proficiencyBonus(character.level));
+    $("#next-level-label").textContent = character.level >= 20 ? "Maximum level" : `Level ${character.level + 1}`;
+    $("#xp-summary").textContent = character.level >= 20 ? `${character.xp.toLocaleString()} XP · Level cap` : `${character.xp.toLocaleString()} / ${nextThreshold.toLocaleString()} XP`;
+    $("#xp-progress").style.width = `${progress}%`;
+    $("#xp-hint").textContent = character.level >= 20 ? "You've reached the level cap." : `${Math.max(0, nextThreshold - character.xp).toLocaleString()} XP to your next level`;
+    $("#xp-input").value = character.xp;
+    const snapshot = character.inventory.slice(0, 4);
+    $("#inventory-snapshot").innerHTML = snapshot.length ? snapshot.map((item) => `<div class="snapshot-row"><span class="item-glyph">◇</span><strong>${escapeHtml(item.item)}</strong><small>× ${item.quantity}</small></div>`).join("") : '<div class="empty-mini">No gear yet. Add items to your inventory.</div>';
+    renderAbilityCards();
+    renderDerivedOverview();
+    renderAsiProgress();
+    renderEffects();
+  }
+
+  function renderEffectTargets() {
+    const select = $("#effect-target");
+    if (!select) return;
+    const previous = select.value;
+    select.innerHTML = playerEffectTargets.length
+      ? playerEffectTargets.map((target) => `<option value="${escapeHtml(target.id)}">${escapeHtml(target.name)} · ${escapeHtml(target.ownerName || "Player")}</option>`).join("")
+      : '<option value="">Belum ada karakter teman</option>';
+    if (playerEffectTargets.some((target) => target.id === previous)) select.value = previous;
+    $("#share-bardic-inspiration").disabled = !playerEffectTargets.length || !/bardic inspiration/i.test(String(active()?.features || ""));
+  }
+
+  function renderEffects() {
+    const section = $("#effects-panel");
+    const isCampaignRole = serverRole === "dm" || serverRole === "player";
+    section.hidden = !isCampaignRole;
+    $("#dm-effect-form").hidden = serverRole !== "dm";
+    $("#player-effect-form").hidden = serverRole !== "player";
+    const currentEffects = active().effects || [];
+    $("#effect-list").innerHTML = currentEffects.length ? currentEffects.map((effect) => `
+      <article class="effect-row ${effect.type}">
+        <span class="effect-kind">${effect.type === "buff" ? "BUFF" : "DEBUFF"}</span>
+        <div class="effect-copy"><strong>${escapeHtml(effect.name)}</strong><p>${escapeHtml(effect.description || effect.source || "")}</p><small>${escapeHtml([effect.duration, effect.source, effect.appliedBy ? `Dari ${effect.appliedBy}` : ""].filter(Boolean).join(" · "))}</small></div>
+        ${serverRole === "dm" ? `<button class="row-button delete" data-remove-effect="${escapeHtml(effect.id)}" type="button" aria-label="Hapus effect ${escapeHtml(effect.name)}" title="Hapus effect">×</button>` : effect.origin === "skill" ? `<button class="button button-quiet effect-consume" data-consume-effect="${escapeHtml(effect.id)}" type="button">Tandai dipakai</button>` : ""}
+      </article>`).join("") : '<p class="effects-empty">Belum ada buff atau debuff aktif.</p>';
+    if (serverRole === "player") renderEffectTargets();
+  }
+
+  function addDmEffect(event) {
+    event.preventDefault();
+    const name = $("#effect-name").value.trim();
+    const description = $("#effect-description").value.trim();
+    if (!name || !description) return;
+    active().effects.push({
+      id: uid(), type: $("#effect-type").value, name, description,
+      duration: $("#effect-duration").value.trim(), source: "DM", origin: "dm",
+      appliedBy: "DM", createdAt: Date.now()
+    });
+    saveCharacters();
+    renderEffects();
+    $("#dm-effect-form").reset();
+    showToast("Effect diberikan ke karakter.");
+  }
+
+  async function shareBardicInspiration() {
+    const targetId = $("#effect-target").value;
+    if (!targetId || !/bardic inspiration/i.test(String(active().features || ""))) return;
+    try {
+      const result = await requestJson("/api/player/effect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: inviteCode, ownerKey: playerOwnerKey, sourceId: active().id, targetId })
+      });
+      showToast(`Bardic Inspiration diberikan ke ${result.target}.`);
+    } catch (error) {
+      showToast(error.message || "Buff tidak dapat diberikan.");
+    }
+  }
+
+  async function consumeSkillEffect(effectId) {
+    try {
+      await requestJson("/api/player/effect/consume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: inviteCode, ownerKey: playerOwnerKey, characterId: active().id, effectId })
+      });
+      active().effects = active().effects.filter((effect) => effect.id !== effectId);
+      saveCharacters();
+      renderEffects();
+      showToast("Effect skill ditandai sudah dipakai.");
+    } catch (error) {
+      showToast(error.message || "Effect tidak dapat diperbarui.");
+    }
+  }
+
+  function fillSelect(select, values, currentValue) {
+    select.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+    if (!values.includes(currentValue)) {
+      const option = document.createElement("option");
+      option.value = currentValue;
+      option.textContent = currentValue;
+      select.append(option);
+    }
+    select.value = currentValue;
+  }
+
+  function renderForm() {
+    const character = active();
+    $("#character-form").reset();
+    $$("[data-field]").forEach((field) => {
+      const value = character[field.dataset.field];
+      if (field.dataset.field === "className") fillSelect(field, CLASSES, value);
+      else if (field.dataset.field === "background") fillSelect(field, BACKGROUNDS, value);
+      else if (field.dataset.field === "alignment") fillSelect(field, ALIGNMENTS, value);
+      else field.value = value ?? "";
+    });
+    const subclassDatalist = $("#subclass-options");
+    if (subclassDatalist) {
+      const classSubclasses = SUBCLASSES[character.className] || [];
+      subclassDatalist.innerHTML = classSubclasses.map((name) => `<option value="${escapeHtml(name)}">`).join("");
+    }
+    const raceDatalist = $("#race-options");
+    if (raceDatalist) {
+      raceDatalist.innerHTML = RACES.map((r) => `<option value="${escapeHtml(r.name)}">`).join("");
+    }
+    renderAbilities();
+    renderDerivedFields();
+    renderSkillOptions();
+  }
+
+  function parseSelectedSkills(character) {
+    const skillLine = String(character.proficiencies || "").split(/\r?\n/).find((line) => /^skills:/i.test(line));
+    return new Set((skillLine ? skillLine.slice(skillLine.indexOf(":") + 1) : "")
+      .split(",").map((skill) => skill.trim().toLowerCase()).filter(Boolean));
+  }
+
+  function backgroundSkills(character) {
+    return (BACKGROUND_BUILDS[character.background] || BACKGROUND_BUILDS.Custom).skills;
+  }
+
+  function availableClassSkills(character) {
+    const fixed = new Set(backgroundSkills(character).map((skill) => skill.toLowerCase()));
+    return (CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).skills
+      .filter((skill) => !fixed.has(skill.toLowerCase()));
+  }
+
+  function renderSkillOptions() {
+    const character = active();
+    const fixed = backgroundSkills(character);
+    const options = availableClassSkills(character);
+    const count = SKILL_PICK_COUNTS[character.className] || 2;
+    const selected = [...parseSelectedSkills(character)].filter((skill) => options.some((option) => option.toLowerCase() === skill)).slice(0, count);
+    $("#skill-pick-count").textContent = `Pilih ${count} skill class`;
+    $("#skill-picker-help").textContent = fixed.length
+      ? `Background ${character.background} memberi ${fixed.join(", ")} secara otomatis. Pilih ${count} skill tambahan dari class ${character.className}.`
+      : `Pilih ${count} skill dari daftar class ${character.className}.`;
+    $("#skill-options").innerHTML = options.map((skill) =>
+      `<label class="skill-option"><input type="checkbox" data-class-skill="${escapeHtml(skill)}" ${selected.includes(skill.toLowerCase()) ? "checked" : ""}><span>${escapeHtml(skill)}</span></label>`
+    ).join("");
+  }
+
+  function saveSelectedSkills() {
+    const character = active();
+    const selected = $$("[data-class-skill]:checked").map((input) => input.dataset.classSkill);
+    setCharacterSkills(character, selected);
+    saveCharacters();
+    renderSkillOptions();
+    renderOverview();
+  }
+
+  function setCharacterSkills(character, selected) {
+    const background = backgroundSkills(character);
+    const choices = availableClassSkills(character)
+      .filter((skill) => selected.some((choice) => choice.toLowerCase() === skill.toLowerCase()))
+      .slice(0, SKILL_PICK_COUNTS[character.className] || 2);
+    const allSkills = [...new Map([...choices, ...background].map((skill) => [skill.toLowerCase(), skill])).values()];
+    const lines = String(character.proficiencies || "")
+      .split(/\r?\n/)
+      .filter((line) => !/^skills:/i.test(line));
+    lines.push(`Skills: ${allSkills.join(", ")}`);
+    character.proficiencies = lines.filter(Boolean).join("\n");
+    const proficienciesField = $("[data-field=proficiencies]");
+    if (proficienciesField) proficienciesField.value = character.proficiencies;
+  }
+
+  function renderInventory() {
+    const character = active();
+    $("#inventory-title").textContent = `${character.name || "Adventurer"}'s gear`;
+    $("#gold-input").value = character.gold;
+    const body = $("#inventory-rows");
+    $("#empty-inventory").hidden = character.inventory.length > 0;
+    body.innerHTML = character.inventory.map((item) => `<tr data-item="${escapeHtml(item.id)}">
+      <td><span class="inventory-item-name"><span class="item-glyph">◇</span>${escapeHtml(item.item)}</span></td>
+      <td><input data-item-field="quantity" type="number" min="1" step="1" value="${item.quantity}" aria-label="${escapeHtml(item.item)} quantity"></td>
+      <td><input data-item-field="weight" type="number" min="0" step="0.1" value="${item.weight}" aria-label="${escapeHtml(item.item)} weight in pounds"></td>
+      <td><span class="status-pill ${item.equipped ? "equipped" : ""}">${item.equipped ? "Equipped" : "Carried"}</span></td>
+      <td><div class="row-actions"><button class="row-button" data-action="toggle" title="${item.equipped ? "Mark as carried" : "Mark as equipped"}" aria-label="${item.equipped ? "Mark as carried" : "Mark as equipped"}">${item.equipped ? "✓" : "↗"}</button><button class="row-button delete" data-action="delete" title="Remove item" aria-label="Remove ${escapeHtml(item.item)}">×</button></div></td>
+    </tr>`).join("");
+    const itemCount = character.inventory.reduce((sum, item) => sum + item.quantity, 0);
+    const weight = character.inventory.reduce((sum, item) => sum + item.weight * item.quantity, 0);
+    $("#item-count").textContent = `${itemCount} ${itemCount === 1 ? "item" : "items"}`;
+    $("#total-weight").textContent = `${Number(weight.toFixed(1))} lb.`;
+  }
+
+  function renderAll() {
+    renderCharacterList();
+    renderOverview();
+    renderDerivedFields();
+    renderForm();
+    renderInventory();
+  }
+
+  function closeCharacterRename() {
+    const form = $("#rename-character-form");
+    if (!form) return;
+    form.hidden = true;
+    $("#hero-name").hidden = false;
+    $("#edit-character-name").hidden = false;
+    $("#rename-character-input").setCustomValidity("");
+  }
+
+  function switchView(name) {
+    closeCharacterRename();
+    activeView = name;
+    $$(".view").forEach((view) => view.classList.toggle("active", view.id === `${name}-view`));
+    $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.view === name));
+    const viewLabel = { overview: "CHARACTER OVERVIEW", sheet: "CHARACTER SHEET", inventory: "INVENTORY" };
+    $("#breadcrumb-view").textContent = viewLabel[name];
+  }
+
+  function updateField(field) {
+    const character = active();
+    const key = field.dataset.field;
+    const oldClass = character.className;
+    const previousBackgroundSkills = new Set(backgroundSkills(character).map((skill) => skill.toLowerCase()));
+    const previousSkills = [...parseSelectedSkills(character)].filter((skill) => !previousBackgroundSkills.has(skill));
+    const oldMaxHp = character.maxHp;
+    const updateStarterGear = key === "className" && field.value !== oldClass && hasUntouchedStarterGear(character);
+    if (key === "level" || key === "xp" || key === "maxHp" || key === "currentHp" || key === "ac" || key === "speed") {
+      if (field.value === "") return;
+      character[key] = Number(field.value);
+      if (key === "level") {
+        character.level = Math.min(20, Math.max(1, Math.trunc(character.level)));
+        character.xp = Math.max(character.xp, XP_THRESHOLDS[character.level - 1]);
+        $("[data-field=xp]").value = character.xp;
+      }
+      if (key === "xp" || key === "ac" || key === "speed") character[key] = Math.max(0, Math.trunc(character[key]));
+      if (key === "xp") {
+        character.level = levelFromXp(character.xp);
+        $("[data-field=level]").value = character.level;
+      }
+      if (key === "maxHp") {
+        character.maxHp = Math.max(1, Math.trunc(character.maxHp));
+        if (serverRole === "dm") character.manualStats.maxHp = character.maxHp;
+      }
+      if (key === "ac" && serverRole === "dm") character.manualStats.ac = character.ac;
+      if (key === "currentHp") character.currentHp = Math.min(character.maxHp, Math.max(0, Math.trunc(character.currentHp)));
+      if (key === "maxHp" && character.currentHp > character.maxHp) character.currentHp = character.maxHp;
+      field.value = character[key];
+    } else {
+      character[key] = field.value.trim();
+    }
+    if (updateStarterGear) character.inventory = starterInventory(character.className);
+    if (key === "className" && character.className !== oldClass) {
+      const saveLine = `Saving throws: ${(CLASS_BUILDS[character.className] || CLASS_BUILDS.Fighter).saves}`;
+      const lines = String(character.proficiencies || "").split(/\r?\n/).filter((line) => !/^saving throws:/i.test(line));
+      lines.unshift(saveLine);
+      character.proficiencies = lines.join("\n");
+    }
+    if (key === "className" || key === "background") {
+      setCharacterSkills(character, previousSkills);
+      renderSkillOptions();
+      if (key === "className") {
+        const subclassDatalist = $("#subclass-options");
+        if (subclassDatalist) {
+          const classSubclasses = SUBCLASSES[character.className] || [];
+          subclassDatalist.innerHTML = classSubclasses.map((name) => `<option value="${escapeHtml(name)}">`).join("");
+        }
+      }
+    }
+    if (key !== "currentHp") syncDerivedStats(character);
+    else character.currentHp = Math.min(character.maxHp, Math.max(0, Math.trunc(Number(field.value) || 0)));
+    if (key !== "currentHp" && oldMaxHp !== character.maxHp) {
+      const hpInput = $("[data-field=currentHp]");
+      if (hpInput) hpInput.value = character.currentHp;
+    }
+    saveCharacters();
+    renderCharacterList();
+    renderOverview();
+    if (serverRole === "dm") renderDmRoster();
+    if (updateStarterGear) renderInventory();
+    if (key === "name") $("#inventory-title").textContent = `${character.name || "Adventurer"}'s gear`;
+  }
+
+  function createCharacter() {
+    const number = characters.length + 1;
+    const character = makeCharacter(`New Adventurer ${number}`);
+    characters.push(character);
+    activeId = character.id;
+    saveCharacters();
+    renderAll();
+    switchView("sheet");
+    $("[data-field=name]").focus();
+    showToast("New character created.");
+  }
+
+  function gachaCharacter() {
+    const character = makeGachaCharacter();
+    characters.push(character);
+    activeId = character.id;
+    saveCharacters();
+    renderAll();
+    switchView("overview");
+    showToast(`${character.name} siap berpetualang!`);
+  }
+
+  function exportCharacter() {
+    const character = active();
+    const slug = character.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "character";
+    if (serverRole === "player") {
+      downloadJson(`${slug}-backup.json`, playerBackup(playerOwnerKey, playerDisplayName, characters));
+    } else if (serverRole === "dm") {
+      const profile = character.ownerKey ? characters.filter((entry) => entry.ownerKey === character.ownerKey) : [character];
+      downloadJson(`${slug}-backup.json`, playerBackup(character.ownerKey || "", character.ownerName || "", profile));
+    } else {
+      downloadJson(`${slug}.json`, character);
+    }
+  }
+
+  async function importCharacter(file) {
+    try {
+      const backup = normalizeImportedBackup(JSON.parse(await file.text()));
+      if (serverRole === "player") {
+        const ownerKey = backup.ownerKey || playerOwnerKey;
+        if (!/^[a-f0-9]{48}$/.test(ownerKey)) throw new Error("File backup memiliki identitas pemain yang tidak valid.");
+        const result = await requestJson("/api/player/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: inviteCode, ownerKey, playerName: playerDisplayName,
+            playerFile: { ...backup, ownerKey }
+          })
+        });
+        playerOwnerKey = result.ownerKey;
+        savePlayerKey(inviteCode, playerOwnerKey);
+        characters = result.characters.map(normalizeCharacter).filter(Boolean);
+        if (!characters.length) characters = [makeCharacter(`${playerDisplayName}'s Adventurer`, "Fighter")];
+        characters.forEach(syncDerivedStats);
+        activeId = characters[0].id;
+        saveCharacters();
+        renderAll();
+        showToast("Backup pemain berhasil dipulihkan.");
+        return;
+      }
+      const imported = backup.characters[0];
+      if (!imported) throw new Error("File tidak berisi karakter yang valid.");
+      imported.id = uid();
+      characters.push(imported);
+      activeId = imported.id;
+      saveCharacters();
+      renderAll();
+      showToast("Karakter berhasil diimpor.");
+    } catch (error) {
+      console.error("Could not import character:", error);
+      showToast("Could not import this file. Choose a valid character JSON export.");
+    }
+  }
+
+  function addInventoryItem(event) {
+    event.preventDefault();
+    const character = active();
+    const item = $("#item-name").value.trim();
+    if (!item) return;
+    character.inventory.push({
+      id: uid(), item, quantity: Math.max(1, Number($("#item-quantity").value) || 1),
+      weight: Math.max(0, Number($("#item-weight").value) || 0), equipped: $("#item-equipped").checked
+    });
+    syncDerivedStats(character);
+    saveCharacters();
+    renderInventory();
+    renderOverview();
+    $("#item-dialog").close();
+    $("#item-form").reset();
+    $("#item-quantity").value = 1;
+    $("#item-weight").value = 0;
+    showToast("Item added to inventory.");
+  }
+
+  $("#character-list").addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-delete-character]");
+    if (deleteButton) {
+      const character = characters.find((entry) => entry.id === deleteButton.dataset.deleteCharacter);
+      if (!character || characters.length === 1 || !window.confirm(`Hapus karakter "${character.name}"?`)) return;
+      characters = characters.filter((entry) => entry.id !== character.id);
+      if (activeId === character.id) activeId = characters[0].id;
+      saveCharacters();
+      renderAll();
+      showToast("Character deleted.");
+      return;
+    }
+    const button = event.target.closest("[data-character]");
+    if (!button) return;
+    closeCharacterRename();
+    activeId = button.dataset.character;
+    saveCharacters();
+    renderAll();
+  });
+
+  $$(".nav-item").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
+  $$("[data-go]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.go)));
+  $("#add-character").addEventListener("click", () => { closeCharacterRename(); createCharacter(); });
+  $("#gacha-character").addEventListener("click", () => { closeCharacterRename(); gachaCharacter(); });
+  $("#edit-character-name").addEventListener("click", () => {
+    const input = $("#rename-character-input");
+    input.value = active().name;
+    $("#hero-name").hidden = true;
+    $("#edit-character-name").hidden = true;
+    $("#rename-character-form").hidden = false;
+    input.focus();
+    input.select();
+  });
+  $("#cancel-character-rename").addEventListener("click", () => {
+    closeCharacterRename();
+    $("#edit-character-name").focus();
+  });
+  $("#rename-character-input").addEventListener("input", (event) => event.target.setCustomValidity(""));
+  $("#rename-character-input").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCharacterRename();
+      $("#edit-character-name").focus();
+    }
+  });
+  $("#rename-character-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const input = $("#rename-character-input");
+    const name = input.value.trim();
+    if (!name) {
+      input.setCustomValidity("Nama karakter tidak boleh kosong.");
+      input.reportValidity();
+      return;
+    }
+    active().name = name;
+    closeCharacterRename();
+    saveCharacters();
+    renderAll();
+    $("#edit-character-name").focus();
+    showToast("Nama karakter diperbarui.");
+  });
+  $("#character-form").addEventListener("input", (event) => {
+    if (event.target.matches("[data-field]")) updateField(event.target);
+  });
+  $("#character-form").addEventListener("change", (event) => {
+    if (event.target.matches("[data-field]")) updateField(event.target);
+  });
+  $("#skill-options").addEventListener("change", (event) => {
+    const input = event.target.closest("[data-class-skill]");
+    if (!input) return;
+    const maximum = SKILL_PICK_COUNTS[active().className] || 2;
+    if (input.checked && $$("[data-class-skill]:checked").length > maximum) {
+      input.checked = false;
+      showToast(`Class ${active().className} hanya dapat memilih ${maximum} skill.`);
+      return;
+    }
+    saveSelectedSkills();
+  });
+  $("#ability-inputs").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-ability]");
+    if (!input || input.value === "") return;
+    const score = Math.min(30, Math.max(1, Math.trunc(Number(input.value) || 1)));
+    active().abilities[input.dataset.ability] = score;
+    input.value = score;
+    input.nextElementSibling.textContent = `Modifier ${signed(abilityModifier(score))}`;
+    syncDerivedStats(active());
+    saveCharacters();
+    renderOverview();
+    renderInventory();
+    const currentHpInput = $("[data-field=currentHp]");
+    if (currentHpInput) currentHpInput.value = active().currentHp;
+  });
+  $("#asi-content").addEventListener("click", (event) => {
+    const modeButton = event.target.closest("[data-asi-mode]");
+    if (modeButton) {
+      const level = Number(modeButton.dataset.asiLevel);
+      const current = active().asiProgress[level];
+      if (current && Object.values(current.allocations || {}).some((points) => Number(points) > 0)) return;
+      active().asiProgress[level] = { mode: modeButton.dataset.asiMode, allocations: {} };
+      saveCharacters();
+      renderAsiProgress();
+      return;
+    }
+
+    const resetButton = event.target.closest("[data-asi-reset]");
+    if (resetButton) {
+      const level = Number(resetButton.dataset.asiReset);
+      const character = active();
+      const progress = character.asiProgress[level];
+      if (!progress) return;
+      for (const [ability, points] of Object.entries(progress.allocations || {})) {
+        if (Object.hasOwn(character.abilities, ability)) {
+          character.abilities[ability] = Math.max(1, character.abilities[ability] - Number(points || 0));
+        }
+      }
+      delete character.asiProgress[level];
+      syncDerivedStats(character);
+      saveCharacters();
+      renderAll();
+      return;
+    }
+
+    const choice = event.target.closest("[data-asi-ability]");
+    if (!choice || choice.disabled) return;
+    const character = active();
+    const level = Number(choice.dataset.asiLevel);
+    const ability = choice.dataset.asiAbility;
+    const award = character.asiProgress[level];
+    if (!award || !["single", "split"].includes(award.mode)) return;
+    const points = award.mode === "single" ? 2 : 1;
+    if (character.abilities[ability] + points > 20) return;
+    character.abilities[ability] += points;
+    award.allocations[ability] = points;
+    const allocated = Object.values(award.allocations).reduce((sum, value) => sum + Number(value), 0);
+    if (allocated === 2) {
+      character.asiChoicesUsed.push(level);
+      delete character.asiProgress[level];
+    }
+    syncDerivedStats(character);
+    saveCharacters();
+    renderAll();
+  });
+  $("#save-xp").addEventListener("click", () => {
+    active().xp = Math.max(0, Math.trunc(Number($("#xp-input").value) || 0));
+    active().level = levelFromXp(active().xp);
+    syncDerivedStats(active());
+    saveCharacters();
+    renderOverview();
+    renderCharacterList();
+  });
+  $("#xp-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") $("#save-xp").click();
+  });
+  let selectedDie = 0;
+  const diceHistory = [];
+  let diceRollInProgress = false;
+  const dieLabel = (sides) => sides === 100 ? "d%" : `d${sides}`;
+  function clearCurrentDiceResult() {
+    $("#dice-result-empty").hidden = false;
+    $("#dice-result-roll").hidden = true;
+    $("#dice-result-values").replaceChildren();
+    $("#dice-total").textContent = "—";
+    $("#dice-result").setAttribute("aria-label", "Hasil lemparan");
+  }
+
+  function updateDiceRollButton() {
+    const countInput = $("#dice-count");
+    const count = Math.min(20, Math.max(1, Math.trunc(Number(countInput.value) || 1)));
+    countInput.value = count;
+    countInput.disabled = diceRollInProgress;
+    $$("[data-die]").forEach((option) => { option.disabled = diceRollInProgress; });
+    $("#roll-die").textContent = selectedDie ? `Lempar ${count}${dieLabel(selectedDie)}` : "Lempar dadu";
+    $("#roll-die").disabled = !selectedDie || diceRollInProgress;
+  }
+
+  function renderDiceHistory() {
+    $("#dice-history-empty").hidden = diceHistory.length > 0;
+    $("#clear-dice-history").disabled = diceHistory.length === 0;
+    $("#dice-history-list").innerHTML = diceHistory.map((entry) => `
+      <li class="dice-history-entry"><span class="dice-history-expression">${entry.expression}</span><span class="dice-history-values">${entry.rolls.join(" + ")}</span><strong>${entry.total}</strong></li>`).join("");
+  }
+
+  $("#open-dice-tray").addEventListener("click", () => {
+    selectedDie = 0;
+    clearCurrentDiceResult();
+    $("#dice-selection-label").textContent = "PILIH DADU";
+    $("#dice-count").value = 2;
+    diceRollInProgress = false;
+    updateDiceRollButton();
+    $$("[data-die]").forEach((option) => {
+      option.classList.remove("selected");
+      option.setAttribute("aria-pressed", "false");
+    });
+    $("#dice-dialog").showModal();
+  });
+  $("#close-dice-dialog").addEventListener("click", () => $("#dice-dialog").close());
+  $("#dice-dialog").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) event.currentTarget.close();
+  });
+  $(".dice-options").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-die]");
+    if (!button) return;
+    selectedDie = Number(button.dataset.die);
+    clearCurrentDiceResult();
+    $$("[data-die]").forEach((option) => {
+      const selected = option === button;
+      option.classList.toggle("selected", selected);
+      option.setAttribute("aria-pressed", String(selected));
+    });
+    $("#dice-selection-label").textContent = selectedDie === 100 ? "PERCENTILE DIE" : `D${selectedDie} SELECTED`;
+    updateDiceRollButton();
+  });
+  $("#dice-count").addEventListener("input", () => {
+    updateDiceRollButton();
+    clearCurrentDiceResult();
+  });
+  $("#clear-dice-history").addEventListener("click", () => {
+    diceHistory.length = 0;
+    renderDiceHistory();
+  });
+  $("#roll-die").addEventListener("click", async () => {
+    if (!selectedDie || diceRollInProgress) return;
+    const count = Math.min(20, Math.max(1, Math.trunc(Number($("#dice-count").value) || 1)));
+    $("#dice-count").value = count;
+    const rolls = Array.from({ length: count }, () => 1 + Math.floor(Math.random() * selectedDie));
+    const expression = `${count}${dieLabel(selectedDie)}`;
+    const values = $("#dice-result-values");
+    $("#dice-result-empty").hidden = true;
+    $("#dice-result-roll").hidden = false;
+    values.innerHTML = rolls.map((_, index) => `<span class="dice-face rolling" style="--roll-index:${index}" data-roll-index="${index}">?</span>`).join("");
+    diceRollInProgress = true;
+    updateDiceRollButton();
+    const animation = setInterval(() => {
+      $$(".dice-face", values).forEach((face) => {
+        face.textContent = 1 + Math.floor(Math.random() * selectedDie);
+      });
+    }, 75);
+    await new Promise((resolve) => setTimeout(resolve, 1050 + (count - 1) * 28));
+    clearInterval(animation);
+    $$(".dice-face", values).forEach((face, index) => {
+      face.textContent = rolls[index];
+      face.classList.remove("rolling");
+    });
+    const total = rolls.reduce((sum, value) => sum + value, 0);
+    $("#dice-total").textContent = total;
+    $("#dice-result").setAttribute("aria-label", `Hasil ${expression}: ${rolls.join(", ")}. Total ${total}.`);
+    diceHistory.unshift({ expression, rolls, total });
+    diceHistory.splice(12);
+    renderDiceHistory();
+    diceRollInProgress = false;
+    updateDiceRollButton();
+  });
+  $("#add-item").addEventListener("click", () => {
+    $("#item-form").reset();
+    $("#item-quantity").value = 1;
+    $("#item-weight").value = 0;
+    $("#item-dialog").showModal();
+    $("#item-name").focus();
+  });
+  $("#item-form").addEventListener("submit", addInventoryItem);
+  $("#close-dialog").addEventListener("click", () => $("#item-dialog").close());
+  $("#cancel-item").addEventListener("click", () => $("#item-dialog").close());
+  $("#inventory-rows").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-item-field]");
+    if (!input) return;
+    const row = input.closest("[data-item]");
+    const item = active().inventory.find((entry) => entry.id === row.dataset.item);
+    if (!item || input.value === "") return;
+    item[input.dataset.itemField] = input.dataset.itemField === "quantity"
+      ? Math.max(1, Math.trunc(Number(input.value) || 1))
+      : Math.max(0, Number(input.value) || 0);
+    saveCharacters();
+    const count = active().inventory.reduce((sum, entry) => sum + entry.quantity, 0);
+    const weight = active().inventory.reduce((sum, entry) => sum + entry.weight * entry.quantity, 0);
+    $("#item-count").textContent = `${count} ${count === 1 ? "item" : "items"}`;
+    $("#total-weight").textContent = `${Number(weight.toFixed(1))} lb.`;
+    renderOverview();
+  });
+  $("#inventory-rows").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-action]");
+    if (!button) return;
+    const row = button.closest("[data-item]");
+    const character = active();
+    const index = character.inventory.findIndex((item) => item.id === row.dataset.item);
+    if (index < 0) return;
+    if (button.dataset.action === "delete") character.inventory.splice(index, 1);
+    else character.inventory[index].equipped = !character.inventory[index].equipped;
+    syncDerivedStats(character);
+    saveCharacters();
+    renderInventory();
+    renderOverview();
+  });
+  $("#gold-input").addEventListener("input", (event) => {
+    if (event.target.value === "") return;
+    active().gold = Math.max(0, Math.trunc(Number(event.target.value) || 0));
+    saveCharacters();
+  });
+  $("#export-button").addEventListener("click", exportCharacter);
+  $("#import-file").addEventListener("change", (event) => {
+    const [file] = event.target.files;
+    if (file) importCharacter(file);
+    event.target.value = "";
+  });
+  $("#print-sheet").addEventListener("click", () => {
+    switchView("sheet");
+    window.print();
+  });
+
+  $("#copy-player-link").addEventListener("click", async () => {
+    const link = $("#player-share-link");
+    try {
+      await navigator.clipboard.writeText(link.value);
+    } catch {
+      link.select();
+      document.execCommand("copy");
+    }
+    showToast("Link pemain disalin. Bagikan hanya kepada pemain di hotspot.");
+  });
+  $("#dm-roster").addEventListener("click", (event) => {
+    const characterButton = event.target.closest("[data-dm-character]");
+    if (characterButton) {
+      activeId = characterButton.dataset.dmCharacter;
+      saveCharacters();
+      renderAll();
+      switchView("overview");
+      return;
+    }
+    const button = event.target.closest("[data-export-owner]");
+    if (!button) return;
+    const key = button.dataset.exportOwner;
+    const group = characters.filter((character) => (character.ownerKey || `dm:${character.id}`) === key);
+    if (!group.length) return;
+    downloadJson(`${(group[0].ownerName || group[0].name).toLowerCase().replace(/[^a-z0-9]+/g, "-") || "player"}-backup.json`,
+      playerBackup(group[0].ownerKey || "", group[0].ownerName || "", group));
+  });
+  $("#dm-effect-form").addEventListener("submit", addDmEffect);
+  $("#effect-list").addEventListener("click", (event) => {
+    const consumeButton = event.target.closest("[data-consume-effect]");
+    if (consumeButton && serverRole === "player") {
+      consumeSkillEffect(consumeButton.dataset.consumeEffect);
+      return;
+    }
+    const button = event.target.closest("[data-remove-effect]");
+    if (!button || serverRole !== "dm") return;
+    active().effects = (active().effects || []).filter((effect) => effect.id !== button.dataset.removeEffect);
+    saveCharacters();
+    renderEffects();
+  });
+  $("#share-bardic-inspiration").addEventListener("click", shareBardicInspiration);
+  $("#dm-import-button").addEventListener("click", () => $("#dm-import-file").click());
+  $("#dm-import-file").addEventListener("change", async (event) => {
+    const [file] = event.target.files;
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const backup = normalizeImportedBackup(JSON.parse(await file.text()));
+      const result = await requestJson("/api/dm/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: dmToken, playerFile: { ...backup, characters: backup.characters } })
+      });
+      const state = await requestJson(`/api/bootstrap?role=dm&token=${encodeURIComponent(dmToken)}`);
+      characters = state.characters.map(normalizeCharacter).filter(Boolean);
+      characters.forEach(syncDerivedStats);
+      activeId = characters.some((character) => character.id === activeId) ? activeId : characters[0]?.id;
+      if (!characters.length) {
+        characters = [makeCharacter("DM Character", "Fighter")];
+        activeId = characters[0].id;
+      }
+      saveCharacters();
+      renderAll();
+      renderDmRoster();
+      showToast(`${result.imported} karakter berhasil diimpor.`);
+    } catch (error) {
+      console.error("Could not import player backup to the campaign:", error);
+      showToast(error.message || "File backup tidak dapat diimpor.");
+    }
+  });
+
+  initializeServerMode()
+    .then((serverMode) => {
+      if (!serverMode) {
+        renderAll();
+        switchView("overview");
+      }
+    })
+    .catch((error) => {
+      console.error("Could not initialize the application:", error);
+      $("#app-shell").hidden = false;
+      $("#player-gate").hidden = true;
+      $("#save-status").textContent = `Aplikasi gagal dimulai: ${error.message}`;
+    });
+})();

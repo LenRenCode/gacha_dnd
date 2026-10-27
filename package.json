@@ -1,0 +1,12 @@
+{
+  "name": "gacha-dnd",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-network D&D 5e character gacha and campaign tracker",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
